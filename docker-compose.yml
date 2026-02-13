@@ -1,0 +1,52 @@
+services:
+  minecraft:
+    image: itzg/minecraft-server:latest
+    container_name: mc-server
+    tty: true
+    stdin_open: true
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      VERSION: ${MC_VERSION:-1.20.1}
+      TYPE: ${MC_TYPE:-FORGE}
+      MEMORY: ${MC_MEMORY:-4G}
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: ${RCON_PASSWORD}
+      RCON_PORT: ${RCON_PORT:-25575}
+      STOP_SERVER_ANNOUNCE_DELAY: 10
+      REMOVE_OLD_MODS: "false"
+    volumes:
+      - ./server/data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: mc-health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  bot:
+    build: ./bot
+    container_name: mc-bot
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      SUPER_ADMIN_ID: ${SUPER_ADMIN_ID}
+      RCON_HOST: minecraft
+      RCON_PORT: ${RCON_PORT:-25575}
+      RCON_PASSWORD: ${RCON_PASSWORD}
+      MC_VERSION: ${MC_VERSION:-1.20.1}
+      MC_TYPE: ${MC_TYPE:-FORGE}
+      MC_LOADER: ${MC_LOADER:-forge}
+      MC_MEMORY: ${MC_MEMORY:-4G}
+      MC_CONTAINER_NAME: mc-server
+      LOG_CHAT_ID: ${LOG_CHAT_ID:-}
+    volumes:
+      - ./server/data:/mc-data:rw
+      - ./backups:/backups:rw
+      - ./bot/data:/bot-data:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      minecraft:
+        condition: service_healthy
+    restart: unless-stopped

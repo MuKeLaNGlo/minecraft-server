@@ -1,0 +1,32 @@
+# Server data
+server/data/
+
+# Backups
+backups/*.tar.gz
+
+# Bot database & logs
+bot/data/
+*.db
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
