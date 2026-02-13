@@ -143,13 +143,18 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
         from minecraft.rcon import rcon
         import asyncio
         await callback.answer("Перезапускаю...")
-        await callback.message.edit_text("⏳ Перезапуск сервера...")
         if await docker_manager.is_running():
             try:
+                await rcon.execute("save-all")
+                await callback.message.edit_text("💾 Сохранение мира...")
+                await asyncio.sleep(3)
                 await rcon.execute("say Сервер перезапускается через 5 секунд!")
+                await callback.message.edit_text("⏳ Перезапуск через 5 секунд...")
                 await asyncio.sleep(5)
             except Exception:
                 pass
+        else:
+            await callback.message.edit_text("⏳ Перезапуск сервера...")
         result = await docker_manager.restart()
         text = success_text(f"Сервер перезапущен.\nНовый мир загружается.")
         kb = await _worlds_list_kb()

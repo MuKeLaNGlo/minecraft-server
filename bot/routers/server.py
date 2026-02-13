@@ -256,6 +256,9 @@ async def server_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "stop":
         logger.info(f"Server stop [{callback.from_user.id}]")
         if await docker_manager.is_running():
+            await rcon.execute("save-all")
+            await callback.message.edit_text("💾 Сохранение мира...", reply_markup=_server_kb, parse_mode="HTML")
+            await asyncio.sleep(3)
             await rcon.execute("say Сервер будет остановлен через 10 секунд!")
             await callback.message.edit_text("⏳ Остановка через 10 секунд...", reply_markup=_server_kb, parse_mode="HTML")
             await asyncio.sleep(10)
@@ -267,6 +270,9 @@ async def server_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "restart":
         logger.info(f"Server restart [{callback.from_user.id}]")
         if await docker_manager.is_running():
+            await rcon.execute("save-all")
+            await callback.message.edit_text("💾 Сохранение мира...", reply_markup=_server_kb, parse_mode="HTML")
+            await asyncio.sleep(3)
             await rcon.execute("say Сервер перезапускается через 10 секунд!")
             await callback.message.edit_text("⏳ Рестарт через 10 секунд...", reply_markup=_server_kb, parse_mode="HTML")
             await asyncio.sleep(10)

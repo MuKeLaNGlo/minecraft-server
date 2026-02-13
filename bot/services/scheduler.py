@@ -50,8 +50,10 @@ def _add_job(task_id: int, task_type: str, cron_expr: str, extra_data: str = Non
             from minecraft.docker_manager import docker_manager
             await rcon.execute("say Сервер перезапускается через 1 минуту!")
             await asyncio.sleep(50)
-            await rcon.execute("say Сервер перезапускается через 10 секунд!")
-            await asyncio.sleep(10)
+            await rcon.execute("save-all")
+            await asyncio.sleep(3)
+            await rcon.execute("say Сервер перезапускается через 7 секунд!")
+            await asyncio.sleep(7)
             await docker_manager.restart()
             logger.info("Scheduled restart executed")
 
