@@ -8,6 +8,8 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
+import html
+
 from db.database import db
 from minecraft.player_manager import player_manager
 from states.states import PlayerState
@@ -116,12 +118,12 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
 
     if action == "banlist":
         result = await player_manager.banlist()
-        text = result if result.strip() else "Банлист пуст."
+        text = html.escape(result) if result.strip() else "Банлист пуст."
         await show_menu(callback, text, _players_kb)
 
     elif action == "wl_list":
         result = await player_manager.whitelist_list()
-        text = result if result.strip() else "Whitelist пуст."
+        text = html.escape(result) if result.strip() else "Whitelist пуст."
         await show_menu(callback, text, _players_kb)
 
     elif action in ("kick", "ban", "pardon", "wl_add", "wl_remove", "op", "deop"):
@@ -210,7 +212,7 @@ async def player_selected(callback: CallbackQuery, state: FSMContext):
     logger.info(f"Player action [{callback.from_user.id}]: {action or 'gamemode'} {player_name}")
     await state.clear()
 
-    response = result if result.strip() else success_text("Команда выполнена.")
+    response = html.escape(result) if result.strip() else success_text("Команда выполнена.")
     text = await _players_menu_text()
     full = f"{response}\n\n{text}"
     await show_menu(callback, full, _players_kb)
@@ -259,7 +261,7 @@ async def process_player_name(message: Message, state: FSMContext):
     result = await _dispatch_player_action(player_name, action, gamemode)
     logger.info(f"Player action [{message.from_user.id}]: {action or 'gamemode'} {player_name}")
 
-    response = result if result.strip() else success_text("Команда выполнена.")
+    response = html.escape(result) if result.strip() else success_text("Команда выполнена.")
     await state.clear()
     await message.answer(response)
     menu_text = await _players_menu_text()

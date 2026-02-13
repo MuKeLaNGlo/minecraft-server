@@ -1,3 +1,5 @@
+import html
+
 from aiogram import Router, F
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -144,8 +146,8 @@ async def rcon_callback(callback: CallbackQuery, state: FSMContext):
         await log_to_group(bot, f"RCON [{uid}]: {command_text}")
 
         text = (
-            success_text(f"Выполнено: <code>{command_text}</code>") + "\n\n"
-            f"Ответ: <code>{response}</code>"
+            success_text(f"Выполнено: <code>{html.escape(command_text)}</code>") + "\n\n"
+            f"Ответ: <code>{html.escape(response)}</code>"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀ К категории", callback_data=f"rcon:cat:{cat_key}")],
@@ -227,8 +229,8 @@ async def _collect_param_and_continue(state: FSMContext, value: str, reply_func,
     await log_to_group(bot, f"RCON [{uid}]: {command_text}")
 
     text = (
-        success_text(f"Выполнено: <code>{command_text}</code>") + "\n\n"
-        f"Ответ: <code>{response}</code>"
+        success_text(f"Выполнено: <code>{html.escape(command_text)}</code>") + "\n\n"
+        f"Ответ: <code>{html.escape(response)}</code>"
     )
     await reply_func(text)
     await reply_func(CONSOLE_TEXT, reply_markup=_console_main_kb(), parse_mode="HTML")
@@ -279,4 +281,4 @@ async def execute_rcon(message: Message, state: FSMContext):
     logger.info(f"RCON [{chat_id}]: {command_text} -> {result[:200]}")
     await log_to_group(bot, f"RCON [{chat_id}]: {command_text}")
 
-    await message.answer(f"<code>{response}</code>")
+    await message.answer(f"<code>{html.escape(response)}</code>")
