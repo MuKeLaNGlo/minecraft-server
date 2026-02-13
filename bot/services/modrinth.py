@@ -22,16 +22,18 @@ class ModrinthAPI:
         return self._session
 
     async def search(
-        self, query: str, limit: int = 10, offset: int = 0
+        self, query: str, limit: int = 10, offset: int = 0,
+        server_only: bool = False,
     ) -> Dict:
         """Search mods filtered by current loader and MC version."""
-        facets = json.dumps(
-            [
-                [f"categories:{config.mc_loader}"],
-                [f"versions:{config.mc_version}"],
-                ["project_type:mod"],
-            ]
-        )
+        facet_list = [
+            [f"categories:{config.mc_loader}"],
+            [f"versions:{config.mc_version}"],
+            ["project_type:mod"],
+        ]
+        if server_only:
+            facet_list.append(["server_side:required", "server_side:optional"])
+        facets = json.dumps(facet_list)
         params = {
             "query": query,
             "limit": limit,

@@ -9,12 +9,12 @@ from aiogram.types import (
 )
 
 from db.database import db
-from minecraft.player_manager import player_manager
 from minecraft.rcon import rcon
 from minecraft.rcon_presets import RCON_CATEGORIES, get_command
 from states.states import RconState
 from utils.formatting import truncate, section_header, success_text, error_text
 from core.loader import bot
+from utils.keyboards import player_selector_kb
 from utils.logger import logger, log_to_group
 from utils.nav import check_access, show_menu, back_row, return_to_menu, CANCEL_REPLY_KB
 
@@ -41,14 +41,6 @@ def _console_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-async def _get_online_names() -> list[str]:
-    try:
-        data = await player_manager.get_online_players()
-        return data.get("players", [])
-    except Exception:
-        return []
-
-
 async def _ask_param(reply_func, state, param_tuple, cmd_text: str, first: bool = False):
     """Ask for a parameter — show player buttons if type is 'player', else text input.
 
@@ -57,30 +49,19 @@ async def _ask_param(reply_func, state, param_tuple, cmd_text: str, first: bool 
     param_key, param_prompt, param_type = param_tuple
 
     if param_type == "player":
-        online = await _get_online_names()
-        if online:
-            buttons = []
-            row = []
-            for name in online:
-                row.append(InlineKeyboardButton(
-                    text=name, callback_data=f"rconpl:{name[:40]}",
-                ))
-                if len(row) == 2:
-                    buttons.append(row)
-                    row = []
-            if row:
-                buttons.append(row)
-            buttons.append([InlineKeyboardButton(
-                text="✏ Ввести вручную", callback_data="rcon:manual_param",
-            )])
-            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        kb = await player_selector_kb(
+            manual_callback="rcon:manual_param",
+            back_callback="rcon:back",
+            player_callback_prefix="rconpl",
+        )
+        if kb:
             prefix = f"Команда: <code>{cmd_text}</code>\n\n" if first else ""
             await reply_func(
                 f"{prefix}<b>{param_prompt}</b> — выбери игрока:", reply_markup=kb,
             )
             return
 
-    # Text param — FSM text input
+    # Text param or no online players — FSM text input
     await state.set_state(RconState.waiting_preset_params)
     prefix = f"Команда: <code>{cmd_text}</code>\n\n" if first else ""
     await reply_func(

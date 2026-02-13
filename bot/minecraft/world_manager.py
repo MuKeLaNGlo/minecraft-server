@@ -135,6 +135,30 @@ class WorldManager:
         except Exception as e:
             return {"success": False, "error": f"Ошибка переименования: {e}"}
 
+    async def clone_world(self, name: str, clone_name: str) -> Dict:
+        """Clone a world directory."""
+        if not clone_name or "/" in clone_name or "\\" in clone_name or ".." in clone_name:
+            return {"success": False, "error": "Недопустимое имя мира."}
+
+        src = self.data_path / name
+        dst = self.data_path / clone_name
+
+        if not src.exists():
+            return {"success": False, "error": f"Мир '{name}' не найден."}
+        if dst.exists():
+            return {"success": False, "error": f"Мир '{clone_name}' уже существует."}
+
+        try:
+            await asyncio.to_thread(shutil.copytree, src, dst)
+            self._fix_ownership(dst)
+            logger.info(f"World cloned: {name} -> {clone_name}")
+            return {
+                "success": True,
+                "message": f"Мир '{name}' клонирован как '{clone_name}'.",
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Ошибка клонирования: {e}"}
+
     @staticmethod
     def _fix_ownership(world_dir: Path) -> None:
         """Recursively chown world directory to MC server uid:gid."""

@@ -13,8 +13,9 @@ from minecraft.player_manager import player_manager
 from states.states import PlayerState
 from datetime import datetime, timezone
 from utils.formatting import format_duration, section_header, success_text
+from utils.keyboards import player_selector_kb, get_online_names
 from utils.logger import logger
-from utils.nav import check_admin, check_access, show_menu, back_row, return_to_menu, CANCEL_REPLY_KB
+from utils.nav import check_access, show_menu, back_row, return_to_menu, CANCEL_REPLY_KB
 
 players_router = Router()
 
@@ -52,18 +53,9 @@ def _format_dt_short(dt_str: str) -> str:
         return "?"
 
 
-async def _get_online_names() -> list[str]:
-    """Get list of online player names. Returns [] if server is down."""
-    try:
-        data = await player_manager.get_online_players()
-        return data.get("players", [])
-    except Exception:
-        return []
-
-
 async def _players_menu_text() -> str:
     """Build players menu text with online players and recent activity."""
-    online = await _get_online_names()
+    online = await get_online_names()
 
     if online:
         online_str = ", ".join(f"<b>{p}</b>" for p in online)
@@ -309,24 +301,11 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
 
     elif action in ("kick", "ban", "pardon", "wl_add", "wl_remove", "op", "deop"):
         await state.update_data(player_action=action)
-        online = await _get_online_names()
-        if online:
-            buttons = []
-            row = []
-            for name in online:
-                row.append(InlineKeyboardButton(
-                    text=name, callback_data=f"plsel:{name[:40]}",
-                ))
-                if len(row) == 2:
-                    buttons.append(row)
-                    row = []
-            if row:
-                buttons.append(row)
-            buttons.append([InlineKeyboardButton(
-                text="✏ Ввести вручную", callback_data="pl:manual_name",
-            )])
-            buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="nav:players")])
-            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        kb = await player_selector_kb(
+            manual_callback="pl:manual_name",
+            back_callback="nav:players",
+        )
+        if kb:
             action_labels = {
                 "kick": "👢 Кик", "ban": "🔨 Бан", "pardon": "🕊 Разбан",
                 "wl_add": "➕ Whitelist", "wl_remove": "➖ Whitelist",
@@ -368,6 +347,26 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
         )
 
 
+_ACTION_MAP = {
+    "kick": player_manager.kick,
+    "ban": player_manager.ban,
+    "pardon": player_manager.pardon,
+    "wl_add": player_manager.whitelist_add,
+    "wl_remove": player_manager.whitelist_remove,
+    "op": player_manager.op,
+    "deop": player_manager.deop,
+}
+
+
+async def _dispatch_player_action(player_name: str, action: str | None, gamemode: str | None) -> str:
+    """Execute a player action and return the RCON result string."""
+    if action and action in _ACTION_MAP:
+        return await _ACTION_MAP[action](player_name)
+    if gamemode:
+        return await player_manager.gamemode(player_name, gamemode)
+    return "Неизвестное действие."
+
+
 @players_router.callback_query(F.data.startswith("plsel:"))
 async def player_selected(callback: CallbackQuery, state: FSMContext):
     """Handle player selection from inline buttons."""
@@ -381,25 +380,7 @@ async def player_selected(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.answer("Выполняю...")
-
-    if action == "kick":
-        result = await player_manager.kick(player_name)
-    elif action == "ban":
-        result = await player_manager.ban(player_name)
-    elif action == "pardon":
-        result = await player_manager.pardon(player_name)
-    elif action == "wl_add":
-        result = await player_manager.whitelist_add(player_name)
-    elif action == "wl_remove":
-        result = await player_manager.whitelist_remove(player_name)
-    elif action == "op":
-        result = await player_manager.op(player_name)
-    elif action == "deop":
-        result = await player_manager.deop(player_name)
-    elif gamemode:
-        result = await player_manager.gamemode(player_name, gamemode)
-    else:
-        result = "Неизвестное действие."
+    result = await _dispatch_player_action(player_name, action, gamemode)
 
     logger.info(f"Player action [{callback.from_user.id}]: {action or 'gamemode'} {player_name}")
     await state.clear()
@@ -415,24 +396,11 @@ async def gamemode_select(callback: CallbackQuery, state: FSMContext):
     mode = callback.data.split(":")[1]
     await callback.answer()
     await state.update_data(gamemode=mode, player_action=None)
-    online = await _get_online_names()
-    if online:
-        buttons = []
-        row = []
-        for name in online:
-            row.append(InlineKeyboardButton(
-                text=name, callback_data=f"plsel:{name[:40]}",
-            ))
-            if len(row) == 2:
-                buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-        buttons.append([InlineKeyboardButton(
-            text="✏ Ввести вручную", callback_data="pl:manual_name",
-        )])
-        buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="nav:players")])
-        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    kb = await player_selector_kb(
+        manual_callback="pl:manual_name",
+        back_callback="nav:players",
+    )
+    if kb:
         mode_labels = {
             "survival": "⛏ Выживание", "creative": "🎨 Творческий",
             "adventure": "🗺 Приключение", "spectator": "👁 Наблюдатель",
@@ -463,25 +431,7 @@ async def process_player_name(message: Message, state: FSMContext):
     action = data.get("player_action")
     gamemode = data.get("gamemode")
 
-    if action == "kick":
-        result = await player_manager.kick(player_name)
-    elif action == "ban":
-        result = await player_manager.ban(player_name)
-    elif action == "pardon":
-        result = await player_manager.pardon(player_name)
-    elif action == "wl_add":
-        result = await player_manager.whitelist_add(player_name)
-    elif action == "wl_remove":
-        result = await player_manager.whitelist_remove(player_name)
-    elif action == "op":
-        result = await player_manager.op(player_name)
-    elif action == "deop":
-        result = await player_manager.deop(player_name)
-    elif gamemode:
-        result = await player_manager.gamemode(player_name, gamemode)
-    else:
-        result = "Неизвестное действие."
-
+    result = await _dispatch_player_action(player_name, action, gamemode)
     logger.info(f"Player action [{message.from_user.id}]: {action or 'gamemode'} {player_name}")
 
     response = result if result.strip() else success_text("Команда выполнена.")

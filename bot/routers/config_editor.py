@@ -18,7 +18,7 @@ from minecraft.server_config import (
 from states.states import ConfigState
 from utils.formatting import section_header, success_text, error_text
 from utils.logger import logger
-from utils.nav import check_admin, show_menu, back_row, return_to_menu, CANCEL_REPLY_KB
+from utils.nav import check_admin, show_menu, back_row, restart_row, return_to_menu, CANCEL_REPLY_KB
 
 config_router = Router()
 
@@ -209,6 +209,8 @@ async def config_callback(callback: CallbackQuery, state: FSMContext):
             f"Текущее значение: <b>{current}</b>"
         )
         kb = _prop_value_kb(prop_name, current)
+        if ok:
+            kb.inline_keyboard.insert(-1, restart_row())
         await show_menu(callback, full_text, kb)
 
     elif action == "input":
@@ -265,7 +267,10 @@ async def config_callback(callback: CallbackQuery, state: FSMContext):
                 f"{changes}\n\n"
                 f"Перезапусти сервер для применения."
             )
-        await show_menu(callback, text, _config_main_kb())
+        kb = _config_main_kb()
+        if "error" not in result:
+            kb.inline_keyboard.insert(0, restart_row())
+        await show_menu(callback, text, kb)
 
     elif action == "back_cat":
         await callback.answer()
@@ -326,4 +331,7 @@ async def process_config_value(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(text)
-    await message.answer(CONFIG_MENU_TEXT, reply_markup=_config_main_kb(), parse_mode="HTML")
+    kb = _config_main_kb()
+    if ok:
+        kb.inline_keyboard.insert(0, restart_row())
+    await message.answer(CONFIG_MENU_TEXT, reply_markup=kb, parse_mode="HTML")

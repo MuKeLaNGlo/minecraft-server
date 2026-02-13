@@ -107,6 +107,17 @@ async def scheduler_callback(callback: CallbackQuery, state: FSMContext):
 
     elif action == "delete":
         task_id = int(parts[2])
+        await callback.answer()
+        confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"sch:confirm_delete:{task_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"sch:detail:{task_id}"),
+            ],
+        ])
+        await show_menu(callback, f"Удалить задачу <b>#{task_id}</b>?", confirm_kb)
+
+    elif action == "confirm_delete":
+        task_id = int(parts[2])
         await callback.answer("Удалено")
         await remove_task(task_id)
         logger.info(f"Task {task_id} deleted by {callback.from_user.id}")

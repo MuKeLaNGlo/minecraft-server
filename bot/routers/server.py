@@ -22,8 +22,8 @@ from utils.nav import check_admin, show_menu, back_row, return_to_menu, CANCEL_R
 
 server_router = Router()
 
-# Active auto-refresh tasks per message id
-_refresh_tasks: dict[int, asyncio.Task] = {}
+# Active auto-refresh tasks per message id — importable by nav.py
+active_refresh_tasks: dict[int, asyncio.Task] = {}
 _REFRESH_INTERVAL = 3  # seconds
 _REFRESH_MAX = 60  # max refreshes (~3 min), then stop
 
@@ -84,6 +84,10 @@ async def _build_status_text() -> str:
         health_icon = "🔴"
         health_text = health
 
+    disk_used = status.get("disk_used_gb", 0)
+    disk_total = status.get("disk_total_gb", 0)
+    disk_pct = status.get("disk_percent", 0)
+
     lines = [
         f"{LINE}",
         f"🖥 <b>Сервер</b> — {health_icon} {health_text}",
@@ -91,6 +95,7 @@ async def _build_status_text() -> str:
         "",
         f"CPU: {status_dot(cpu)} {progress_bar(cpu, 100)} {cpu:.1f}% ({online_cpus} ядер)",
         f"RAM: {status_dot(mem_pct)} {progress_bar(mem_mb, limit_mb)} {mem_mb:.0f}/{limit_mb:.0f} МБ",
+        f"💾 Диск: {status_dot(disk_pct)} {progress_bar(disk_used, disk_total)} {disk_used:.1f}/{disk_total:.1f} ГБ ({disk_pct:.0f}%)",
         f"⏱ Аптайм: <b>{uptime}</b>",
     ]
 
@@ -106,8 +111,8 @@ async def _build_status_text() -> str:
                 lines.append(f"\n👥 Онлайн ({count}/{max_p}): {names}")
             else:
                 lines.append(f"\n👥 Онлайн: 0/{max_p}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get online players: {e}")
 
     return "\n".join(lines)
 
@@ -136,7 +141,7 @@ _server_kb = InlineKeyboardMarkup(
 
 def _stop_refresh(msg_id: int) -> None:
     """Cancel auto-refresh task for a message."""
-    task = _refresh_tasks.pop(msg_id, None)
+    task = active_refresh_tasks.pop(msg_id, None)
     if task and not task.done():
         task.cancel()
 
@@ -149,13 +154,13 @@ async def _auto_refresh(message, msg_id: int) -> None:
             text = await _build_status_text()
             try:
                 await message.edit_text(text, reply_markup=_server_kb, parse_mode="HTML")
-            except Exception:
-                # Message deleted, user navigated away, or content unchanged
+            except Exception as e:
+                logger.debug(f"Auto-refresh stopped: {e}")
                 break
     except asyncio.CancelledError:
         pass
     finally:
-        _refresh_tasks.pop(msg_id, None)
+        active_refresh_tasks.pop(msg_id, None)
 
 
 async def _show_server_menu(callback_or_msg, start_refresh: bool = True):
@@ -166,7 +171,8 @@ async def _show_server_menu(callback_or_msg, start_refresh: bool = True):
         msg = callback_or_msg.message
         try:
             await msg.edit_text(text, reply_markup=_server_kb, parse_mode="HTML")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Server menu edit failed: {e}")
             msg = await msg.answer(text, reply_markup=_server_kb, parse_mode="HTML")
     else:
         msg = await callback_or_msg.answer(text, reply_markup=_server_kb, parse_mode="HTML")
@@ -174,7 +180,7 @@ async def _show_server_menu(callback_or_msg, start_refresh: bool = True):
     if start_refresh and msg:
         _stop_refresh(msg.message_id)
         task = asyncio.create_task(_auto_refresh(msg, msg.message_id))
-        _refresh_tasks[msg.message_id] = task
+        active_refresh_tasks[msg.message_id] = task
 
 
 @server_router.callback_query(F.data == "nav:server")
@@ -276,7 +282,8 @@ async def server_callback(callback: CallbackQuery, state: FSMContext):
         result = f"<pre>{truncate(logs)}</pre>"
         try:
             await callback.message.edit_text(result, reply_markup=_server_kb, parse_mode="HTML")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Logs edit failed: {e}")
             await callback.message.answer(result, reply_markup=_server_kb, parse_mode="HTML")
 
     else:

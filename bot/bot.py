@@ -72,8 +72,8 @@ async def on_startup() -> None:
             await bot.send_message(
                 chat_id, f"🟢 <b>{event.player_name}</b> зашёл на сервер"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Notification send failed: {e}")
 
     async def _notify_leave(event: LogEvent):
         if await db.get_setting("notifications_enabled") != "1":
@@ -85,8 +85,8 @@ async def on_startup() -> None:
             await bot.send_message(
                 chat_id, f"🔴 <b>{event.player_name}</b> вышел с сервера"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Notification send failed: {e}")
 
     async def _bridge_mc_to_tg(event: LogEvent):
         if await db.get_setting("chat_bridge_enabled") != "1":
@@ -98,8 +98,8 @@ async def on_startup() -> None:
             await bot.send_message(
                 chat_id, f"💬 <b>{event.player_name}</b>: {event.message}"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Notification send failed: {e}")
 
     async def _notify_server_ready(event: LogEvent):
         if await db.get_setting("notifications_enabled") != "1":
@@ -112,8 +112,8 @@ async def on_startup() -> None:
             await bot.send_message(
                 chat_id, f"✅ Сервер запущен и готов к игре! ({secs}s)"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Notification send failed: {e}")
 
     log_watcher.on("join", _notify_join)
     log_watcher.on("leave", _notify_leave)

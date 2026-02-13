@@ -8,6 +8,7 @@ from aiogram.types import (
 )
 
 from db.database import db
+from utils.logger import logger
 
 # Minimal reply KB — fallback if inline message is lost
 MENU_REPLY_KB = ReplyKeyboardMarkup(
@@ -24,6 +25,11 @@ CANCEL_REPLY_KB = ReplyKeyboardMarkup(
 def back_row(target: str = "main") -> list:
     """Return a row with a single Back button."""
     return [InlineKeyboardButton(text="◀ Назад", callback_data=f"nav:{target}")]
+
+
+def restart_row() -> list:
+    """Return a row with a server restart button."""
+    return [InlineKeyboardButton(text="🔄 Перезапустить сервер", callback_data="srv:restart")]
 
 
 async def main_menu_kb(user_id: str | int) -> InlineKeyboardMarkup:
@@ -85,13 +91,23 @@ async def show_menu(
     Returns the sent/edited Message.
     """
     if isinstance(event, CallbackQuery):
+        # Stop auto-refresh if active on this message (e.g. leaving server menu)
+        _cancel_refresh(event.message.message_id)
         try:
             return await event.message.edit_text(text, reply_markup=kb, parse_mode=parse_mode)
-        except Exception:
-            # Message not modified or deleted — send new
+        except Exception as e:
+            logger.debug(f"show_menu edit failed, sending new: {e}")
             return await event.message.answer(text, reply_markup=kb, parse_mode=parse_mode)
     else:
         return await event.answer(text, reply_markup=kb, parse_mode=parse_mode)
+
+
+def _cancel_refresh(msg_id: int) -> None:
+    """Cancel server auto-refresh task for a message, if any."""
+    from routers.server import active_refresh_tasks
+    task = active_refresh_tasks.pop(msg_id, None)
+    if task and not task.done():
+        task.cancel()
 
 
 async def return_to_menu(message: Message) -> None:

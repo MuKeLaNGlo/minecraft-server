@@ -38,3 +38,10 @@ async def nav_main(callback: CallbackQuery):
 @common_router.message(Command("id"))
 async def cmd_id(message: Message):
     await message.answer(f"Твой ID: <code>{message.from_user.id}</code>")
+
+
+@common_router.message()
+async def catch_all(message: Message):
+    """Catch any unhandled message — resend the main menu."""
+    kb = await main_menu_kb(message.from_user.id)
+    await message.answer(MAIN_MENU_TEXT, reply_markup=kb, parse_mode="HTML")

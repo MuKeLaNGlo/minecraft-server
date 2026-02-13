@@ -102,6 +102,10 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
         buttons.append([InlineKeyboardButton(
             text="✏ Переименовать", callback_data=f"world:rename:{name}"
         )])
+        if generated:
+            buttons.append([InlineKeyboardButton(
+                text="📋 Клонировать", callback_data=f"world:clone:{name}"
+            )])
         buttons.append([InlineKeyboardButton(
             text="💾 Бэкап этого мира", callback_data=f"world:backup:{name}"
         )])
@@ -187,7 +191,13 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
             )
         else:
             text = error_text(result["error"])
-        kb = await _worlds_list_kb()
+        buttons = []
+        if result["success"]:
+            buttons.append([InlineKeyboardButton(
+                text="💾 Перейти к бэкапам", callback_data="nav:backups"
+            )])
+        buttons.append([InlineKeyboardButton(text="◀ К мирам", callback_data="world:list")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         await show_menu(callback, text, kb)
 
     elif action == "rename":
@@ -198,6 +208,19 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             f"Текущее имя: <b>{name}</b>\n\nВведи новое имя мира:",
             reply_markup=CANCEL_REPLY_KB,
+        )
+
+    elif action == "clone":
+        name = ":".join(parts[2:])
+        await callback.answer()
+        await state.update_data(cloning_world=name)
+        await state.set_state(WorldState.waiting_clone_name)
+        await callback.message.answer(
+            f"📋 <b>Клонирование мира</b>\n\n"
+            f"Исходный мир: <b>{name}</b>\n"
+            f"Введи имя для копии:",
+            reply_markup=CANCEL_REPLY_KB,
+            parse_mode="HTML",
         )
 
     elif action == "create":
@@ -211,7 +234,7 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
 
 @worlds_router.message(
     F.text.lower().in_({"◀ отмена", "cancel"}),
-    StateFilter(WorldState.waiting_world_name, WorldState.waiting_new_name),
+    StateFilter(WorldState.waiting_world_name, WorldState.waiting_new_name, WorldState.waiting_clone_name),
 )
 async def cancel_worlds(message: Message, state: FSMContext):
     await state.clear()
@@ -255,6 +278,34 @@ async def process_rename(message: Message, state: FSMContext):
     else:
         text = error_text(result["error"])
     await message.answer(text)
+
+    menu_text = await _worlds_menu_text()
+    kb = await _worlds_list_kb()
+    await message.answer(menu_text, reply_markup=kb, parse_mode="HTML")
+
+
+@worlds_router.message(StateFilter(WorldState.waiting_clone_name))
+async def process_clone_name(message: Message, state: FSMContext):
+    clone_name = message.text.strip()
+    if not clone_name:
+        await message.answer("Введи имя для копии:")
+        return
+
+    if "/" in clone_name or "\\" in clone_name or ".." in clone_name:
+        await message.answer("Недопустимое имя. Попробуй другое:")
+        return
+
+    data = await state.get_data()
+    source = data.get("cloning_world", "")
+    await state.clear()
+
+    status_msg = await message.answer("⏳ Клонирую мир...")
+    result = await world_manager.clone_world(source, clone_name)
+    if result["success"]:
+        text = success_text(result["message"])
+    else:
+        text = error_text(result["error"])
+    await status_msg.edit_text(text, parse_mode="HTML")
 
     menu_text = await _worlds_menu_text()
     kb = await _worlds_list_kb()

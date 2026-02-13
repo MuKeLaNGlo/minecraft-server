@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +26,19 @@ def _calc_cpu_percent(stats: dict) -> float:
     except (KeyError, ZeroDivisionError):
         pass
     return 0.0
+
+
+def _disk_usage() -> dict:
+    """Get disk usage for the MC data partition."""
+    try:
+        usage = shutil.disk_usage(config.mc_data_path)
+        return {
+            "disk_used_gb": (usage.total - usage.free) / 1024 / 1024 / 1024,
+            "disk_total_gb": usage.total / 1024 / 1024 / 1024,
+            "disk_percent": (usage.total - usage.free) / usage.total * 100 if usage.total else 0,
+        }
+    except Exception:
+        return {"disk_used_gb": 0, "disk_total_gb": 0, "disk_percent": 0}
 
 
 class DockerManager:
@@ -109,6 +123,7 @@ class DockerManager:
                     "memory_limit_mb": stats.get("memory_stats", {}).get("limit", 0)
                     / 1024
                     / 1024,
+                    **_disk_usage(),
                 }
             except docker.errors.NotFound:
                 return {"status": "not_found", "health": "unknown"}

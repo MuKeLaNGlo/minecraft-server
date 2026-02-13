@@ -14,10 +14,13 @@ class RconState(StatesGroup):
 
 class BackupState(StatesGroup):
     confirm_restore = State()
+    waiting_clone_name = State()
 
 
 class ModState(StatesGroup):
     waiting_search_query = State()
+    waiting_mod_files = State()
+    waiting_upload_confirm = State()
 
 
 class ConfigState(StatesGroup):
@@ -38,6 +41,7 @@ class PlayerState(StatesGroup):
 class WorldState(StatesGroup):
     waiting_world_name = State()
     waiting_new_name = State()
+    waiting_clone_name = State()
 
 
 class ServerState(StatesGroup):

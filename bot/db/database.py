@@ -109,6 +109,10 @@ class Database:
         )
         return True
 
+    async def get_all_users(self) -> List[str]:
+        rows = await self.fetch_all("SELECT telegram_id FROM users ORDER BY id")
+        return [r[0] for r in rows]
+
     # --- admins ---
 
     async def add_admin(self, telegram_id: str) -> bool:
@@ -131,6 +135,10 @@ class Database:
             "DELETE FROM admins WHERE telegram_id = ?", (telegram_id,)
         )
         return True
+
+    async def get_all_admins(self) -> List[str]:
+        rows = await self.fetch_all("SELECT telegram_id FROM admins ORDER BY id")
+        return [r[0] for r in rows]
 
     # --- blacklist ---
 
