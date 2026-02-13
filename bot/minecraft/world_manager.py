@@ -62,6 +62,9 @@ class WorldManager:
         if current == world_name:
             return {"success": False, "error": f"Мир '{world_name}' уже активен."}
 
+        # Ensure MC server (uid=1000) can write to the world directory
+        self._fix_ownership(world_dir)
+
         ok = server_config.write_property("level-name", world_name)
         if not ok:
             return {"success": False, "error": "Не удалось обновить server.properties."}
@@ -131,6 +134,20 @@ class WorldManager:
             return {"success": True, "message": f"Мир переименован: '{old_name}' → '{new_name}'."}
         except Exception as e:
             return {"success": False, "error": f"Ошибка переименования: {e}"}
+
+    @staticmethod
+    def _fix_ownership(world_dir: Path) -> None:
+        """Recursively chown world directory to MC server uid:gid."""
+        try:
+            stat = world_dir.stat()
+            if stat.st_uid != _MC_UID or stat.st_gid != _MC_GID:
+                for root, dirs, files in os.walk(world_dir):
+                    os.chown(root, _MC_UID, _MC_GID)
+                    for f in files:
+                        os.chown(os.path.join(root, f), _MC_UID, _MC_GID)
+                logger.info(f"Fixed ownership for world dir: {world_dir.name}")
+        except Exception as e:
+            logger.warning(f"Failed to fix ownership for {world_dir}: {e}")
 
     async def _get_dir_size_mb(self, path: Path) -> float:
         """Get directory size in MB using du command."""

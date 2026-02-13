@@ -92,6 +92,7 @@ class DockerManager:
             try:
                 container = self._get_container()
                 stats = container.stats(stream=False)
+                online_cpus = stats.get("cpu_stats", {}).get("online_cpus", 1) or 1
                 return {
                     "status": container.status,
                     "health": container.attrs.get("State", {})
@@ -101,6 +102,7 @@ class DockerManager:
                         "StartedAt", ""
                     ),
                     "cpu_percent": _calc_cpu_percent(stats),
+                    "online_cpus": online_cpus,
                     "memory_mb": stats.get("memory_stats", {}).get("usage", 0)
                     / 1024
                     / 1024,

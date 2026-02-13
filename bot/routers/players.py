@@ -18,6 +18,15 @@ from utils.nav import check_admin, check_access, show_menu, back_row, return_to_
 
 players_router = Router()
 
+# Period filter presets: (callback_suffix, label, sqlite modifier)
+_PERIODS = [
+    ("today", "Сегодня", "-1 day"),
+    ("7d", "7 дней", "-7 days"),
+    ("30d", "30 дней", "-30 days"),
+    ("all", "Всё время", ""),
+]
+
+
 def _format_last_seen(last_seen_str: str) -> str:
     """Format last_seen timestamp into a short relative string."""
     try:
@@ -33,6 +42,14 @@ def _format_last_seen(last_seen_str: str) -> str:
         return f"{secs // 86400}д назад"
     except (ValueError, TypeError):
         return "—"
+
+
+def _format_dt_short(dt_str: str) -> str:
+    """Format datetime string to 'DD.MM HH:MM'."""
+    try:
+        return f"{dt_str[8:10]}.{dt_str[5:7]} {dt_str[11:16]}"
+    except (IndexError, TypeError):
+        return "?"
 
 
 async def _get_online_names() -> list[str]:
@@ -97,10 +114,33 @@ _players_kb = InlineKeyboardMarkup(
             InlineKeyboardButton(text="🎮 Режим игры", callback_data="pl:gamemode"),
             InlineKeyboardButton(text="📢 Объявление", callback_data="pl:say"),
         ],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="pl:stats")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="pl:stats:today")],
         back_row("main"),
     ]
 )
+
+
+def _period_label(suffix: str) -> str:
+    for s, label, _ in _PERIODS:
+        if s == suffix:
+            return label
+    return suffix
+
+
+def _period_since(suffix: str) -> str:
+    for s, _, since in _PERIODS:
+        if s == suffix:
+            return since
+    return ""
+
+
+def _stats_period_buttons(active: str) -> list[list[InlineKeyboardButton]]:
+    """Build period filter buttons row, marking active one."""
+    row = []
+    for suffix, label, _ in _PERIODS:
+        marker = f"• {label} •" if suffix == active else label
+        row.append(InlineKeyboardButton(text=marker, callback_data=f"pl:stats:{suffix}"))
+    return [row]
 
 
 @players_router.callback_query(F.data == "nav:players")
@@ -117,7 +157,8 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
     if not await check_access(callback):
         return
 
-    action = callback.data.split(":")[1]
+    parts = callback.data.split(":")
+    action = parts[1]
     await callback.answer()
 
     if action == "banlist":
@@ -131,42 +172,71 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
         await show_menu(callback, text, _players_kb)
 
     elif action == "stats":
-        stats = await db.get_all_player_stats()
-        if not stats:
-            text = "Статистика пока пуста.\n\nДанные появятся когда игроки зайдут и выйдут с сервера."
-            await show_menu(callback, text, _players_kb)
-            return
+        # Main stats page with period filter
+        period = parts[2] if len(parts) > 2 else "today"
+        since = _period_since(period)
+        label = _period_label(period)
 
-        lines = ["<b>📊 Статистика игроков</b>\n"]
-        for s in stats[:15]:
-            name, sessions, total_secs, last_seen, is_online = s
-            status = "🟢" if is_online else "⚪"
-            lines.append(
-                f"{status} <b>{name}</b>: {format_duration(total_secs)} "
-                f"({sessions} сессий)"
-            )
+        stats = await db.get_all_player_stats(since=since)
+
+        lines = [f"<b>📊 Статистика — {label}</b>\n"]
+
+        # Summary
+        if since:
+            summary = await db.get_period_summary(since)
+            if summary:
+                unique, total_sess, total_secs = summary
+                lines.append(
+                    f"👤 Игроков: <b>{unique}</b>  |  "
+                    f"📈 Сессий: <b>{total_sess}</b>  |  "
+                    f"🕐 Время: <b>{format_duration(total_secs)}</b>\n"
+                )
+
+        if not stats:
+            lines.append("Нет данных за этот период.")
+        else:
+            for s in stats[:15]:
+                name, sessions, total_secs, last_seen, is_online = s
+                status = "🟢" if is_online else "⚪"
+                lines.append(
+                    f"{status} <b>{name}</b>: {format_duration(total_secs)} "
+                    f"({sessions} сесс.)"
+                )
+
         text = "\n".join(lines)
 
-        buttons = []
-        row = []
-        for s in stats[:15]:
-            name = s[0]
-            row.append(InlineKeyboardButton(
-                text=name, callback_data=f"pl:pstat:{name[:40]}",
-            ))
-            if len(row) == 3:
+        # Build keyboard
+        buttons = _stats_period_buttons(period)
+        # Player buttons for detail
+        if stats:
+            row = []
+            for s in stats[:12]:
+                name = s[0]
+                row.append(InlineKeyboardButton(
+                    text=name, callback_data=f"pl:pstat:{period}:{name[:32]}",
+                ))
+                if len(row) == 3:
+                    buttons.append(row)
+                    row = []
+            if row:
                 buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-        buttons.append([InlineKeyboardButton(text="📋 Лог входов/выходов", callback_data="pl:sesslog")])
+        buttons.append([
+            InlineKeyboardButton(text="📋 Лог сессий", callback_data=f"pl:sesslog:{period}"),
+        ])
         buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="nav:players")])
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         await show_menu(callback, text, kb)
 
     elif action == "pstat":
-        # Per-player detail stats
-        pname = ":".join(parts[2:])
+        # Per-player detail: pl:pstat:<period>:<name>
+        period = parts[2] if len(parts) > 2 else "all"
+        pname = ":".join(parts[3:]) if len(parts) > 3 else ""
+        if not pname:
+            await show_menu(callback, "Имя игрока не указано.", _players_kb)
+            return
+
+        since = _period_since(period)
+        label = _period_label(period)
         pstats = await db.get_player_stats(pname)
         if not pstats:
             await show_menu(callback, f"Нет данных по игроку <b>{pname}</b>.", _players_kb)
@@ -176,51 +246,65 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
         avg_secs = pstats["total_seconds"] // max(pstats["session_count"], 1)
 
         lines = [
-            f"<b>📊 {pname}</b> — {status}\n",
+            f"<b>📊 {pname}</b> — {status}",
+            f"<i>Период: {label}</i>\n",
             f"🕐 Общее время: <b>{format_duration(pstats['total_seconds'])}</b>",
             f"📈 Сессий: <b>{pstats['session_count']}</b>",
-            f"⏱ Средняя сессия: <b>{format_duration(avg_secs)}</b>",
+            f"⏱ Средняя: <b>{format_duration(avg_secs)}</b>",
             f"📅 Последний вход: {_format_last_seen(pstats['last_seen'])}",
         ]
         if pstats["online"] and pstats["current_session_start"]:
-            lines.append(f"▶ Текущая сессия с: {pstats['current_session_start'][:16]}")
+            start = _format_dt_short(pstats["current_session_start"])
+            lines.append(f"▶ Текущая сессия с {start}")
 
-        # Recent sessions
-        sessions = await db.get_player_sessions(pname, limit=10)
+        # Sessions for selected period
+        sessions = await db.get_player_sessions(pname, limit=15, since=since)
         if sessions:
-            lines.append("\n<b>Последние сессии:</b>")
+            lines.append(f"\n<b>Сессии ({label}):</b>")
             for joined, left, dur in sessions:
-                j_short = joined[5:16] if joined else "?"  # MM-DD HH:MM
+                j_short = _format_dt_short(joined)
                 if left:
                     lines.append(f"  {j_short} — {format_duration(dur)}")
                 else:
-                    lines.append(f"  {j_short} — ▶ сейчас играет")
+                    lines.append(f"  {j_short} — ▶ играет")
 
         text = "\n".join(lines)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀ К статистике", callback_data="pl:stats")],
+            [InlineKeyboardButton(text=f"◀ К статистике ({label})", callback_data=f"pl:stats:{period}")],
         ])
         await show_menu(callback, text, kb)
 
     elif action == "sesslog":
-        # Global session log
-        sessions = await db.get_session_log(limit=25)
+        # Global session log: pl:sesslog:<period>
+        period = parts[2] if len(parts) > 2 else "today"
+        since = _period_since(period)
+        label = _period_label(period)
+
+        sessions = await db.get_session_log(limit=30, since=since)
         if not sessions:
-            text = "Логов пока нет."
+            text = f"<b>📋 Лог сессий — {label}</b>\n\nНет данных за этот период."
         else:
-            lines = ["<b>📋 Лог входов/выходов</b>\n"]
+            lines = [f"<b>📋 Лог сессий — {label}</b>\n"]
             for name, joined, left in sessions:
-                j_short = joined[5:16] if joined else "?"
+                j_short = _format_dt_short(joined)
                 if left:
                     l_short = left[11:16] if left else "?"
-                    lines.append(f"  {j_short} — {l_short}  <b>{name}</b>")
+                    dur = ""
+                    try:
+                        j_dt = datetime.fromisoformat(joined)
+                        l_dt = datetime.fromisoformat(left)
+                        secs = int((l_dt - j_dt).total_seconds())
+                        dur = f" ({format_duration(secs)})"
+                    except Exception:
+                        pass
+                    lines.append(f"  {j_short} → {l_short}{dur}  <b>{name}</b>")
                 else:
-                    lines.append(f"  {j_short} — ▶ ...     <b>{name}</b>")
+                    lines.append(f"  {j_short} → ▶ играет  <b>{name}</b>")
             text = "\n".join(lines)
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀ К статистике", callback_data="pl:stats")],
-        ])
+        buttons = _stats_period_buttons(period)
+        buttons.append([InlineKeyboardButton(text=f"◀ К статистике", callback_data=f"pl:stats:{period}")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         await show_menu(callback, text, kb)
 
     elif action in ("kick", "ban", "pardon", "wl_add", "wl_remove", "op", "deop"):

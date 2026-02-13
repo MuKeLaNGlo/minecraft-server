@@ -334,7 +334,29 @@ class Database:
             "current_session_start": current[0] if current else None,
         }
 
-    async def get_all_player_stats(self) -> List[Any]:
+    async def get_all_player_stats(self, since: str = "") -> List[Any]:
+        """Get aggregated player stats, optionally filtered by period.
+
+        since: SQLite datetime modifier, e.g. '-1 day', '-7 days', '-30 days'.
+        Empty string = all time.
+        """
+        if since:
+            return await self.fetch_all(
+                """SELECT
+                       player_name,
+                       COUNT(*) as session_count,
+                       COALESCE(SUM(
+                           CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                       ), 0) as total_seconds,
+                       MAX(joined_at) as last_seen,
+                       MAX(CASE WHEN left_at IS NULL THEN 1 ELSE 0 END) as is_online
+                   FROM player_sessions
+                   WHERE joined_at >= datetime('now', ?)
+                      OR left_at IS NULL
+                   GROUP BY player_name
+                   ORDER BY total_seconds DESC""",
+                (since,),
+            )
         return await self.fetch_all(
             """SELECT
                    player_name,
@@ -350,8 +372,52 @@ class Database:
         )
 
 
-    async def get_player_sessions(self, player_name: str, limit: int = 15) -> List[Any]:
+    async def get_session_log(self, limit: int = 25, since: str = "") -> List[Any]:
+        """Get recent join/leave events across all players."""
+        if since:
+            return await self.fetch_all(
+                """SELECT player_name, joined_at, left_at
+                   FROM player_sessions
+                   WHERE joined_at >= datetime('now', ?)
+                   ORDER BY joined_at DESC
+                   LIMIT ?""",
+                (since, limit),
+            )
+        return await self.fetch_all(
+            """SELECT player_name, joined_at, left_at
+               FROM player_sessions
+               ORDER BY joined_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+
+    async def get_period_summary(self, since: str) -> Optional[Any]:
+        """Get aggregate stats for a period: unique players, total sessions, total time."""
+        return await self.fetch_one(
+            """SELECT
+                   COUNT(DISTINCT player_name) as unique_players,
+                   COUNT(*) as total_sessions,
+                   COALESCE(SUM(
+                       CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                   ), 0) as total_seconds
+               FROM player_sessions
+               WHERE joined_at >= datetime('now', ?)""",
+            (since,),
+        )
+
+    async def get_player_sessions(self, player_name: str, limit: int = 15, since: str = "") -> List[Any]:
         """Get recent sessions for a specific player."""
+        if since:
+            return await self.fetch_all(
+                """SELECT joined_at, left_at,
+                       CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                       AS duration_secs
+                   FROM player_sessions
+                   WHERE player_name = ? AND joined_at >= datetime('now', ?)
+                   ORDER BY joined_at DESC
+                   LIMIT ?""",
+                (player_name, since, limit),
+            )
         return await self.fetch_all(
             """SELECT joined_at, left_at,
                    CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
@@ -361,16 +427,6 @@ class Database:
                ORDER BY joined_at DESC
                LIMIT ?""",
             (player_name, limit),
-        )
-
-    async def get_session_log(self, limit: int = 25) -> List[Any]:
-        """Get recent join/leave events across all players."""
-        return await self.fetch_all(
-            """SELECT player_name, joined_at, left_at
-               FROM player_sessions
-               ORDER BY joined_at DESC
-               LIMIT ?""",
-            (limit,),
         )
 
     async def get_recent_players(self, hours: int = 24) -> List[Any]:
