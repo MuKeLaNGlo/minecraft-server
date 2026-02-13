@@ -35,27 +35,45 @@ def _format_last_seen(last_seen_str: str) -> str:
         return "—"
 
 
+async def _get_online_names() -> list[str]:
+    """Get list of online player names. Returns [] if server is down."""
+    try:
+        data = await player_manager.get_online_players()
+        return data.get("players", [])
+    except Exception:
+        return []
+
+
 async def _players_menu_text() -> str:
-    """Build players menu text with recent players shown at the top."""
+    """Build players menu text with online players and recent activity."""
+    online = await _get_online_names()
+
+    if online:
+        online_str = ", ".join(f"<b>{p}</b>" for p in online)
+        desc = f"🟢 Онлайн ({len(online)}): {online_str}"
+    else:
+        desc = "⚪ Никого нет на сервере"
+
     header = section_header(
         "👥", "Игроки",
-        "Управление игроками: бан, вайтлист, права опера.\nОпер — права админа внутри игры (команды, телепорт и т.д.)",
+        f"{desc}\n\nУправление: бан, вайтлист, права опера.\nОпер — права админа внутри игры.",
     )
     recent = await db.get_recent_players(24)
     if not recent:
         return header
 
-    lines = ["\n<b>Последние 24ч:</b>"]
-    for name, last_seen, is_online in recent[:10]:
-        if is_online:
-            lines.append(f"  🟢 {name} — онлайн")
-        else:
-            lines.append(f"  ⚪ {name} — {_format_last_seen(last_seen)}")
+    # Show only offline recent players (online already shown above)
+    offline = [(name, last_seen) for name, last_seen, is_online in recent[:10] if not is_online]
+    if not offline:
+        return header
+
+    lines = ["\n<b>Были недавно:</b>"]
+    for name, last_seen in offline:
+        lines.append(f"  ⚪ {name} — {_format_last_seen(last_seen)}")
     return header + "\n".join(lines)
 
 _players_kb = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Онлайн", callback_data="pl:online")],
         [
             InlineKeyboardButton(text="👢 Кик", callback_data="pl:kick"),
             InlineKeyboardButton(text="🔨 Бан", callback_data="pl:ban"),
@@ -102,16 +120,7 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
     action = callback.data.split(":")[1]
     await callback.answer()
 
-    if action == "online":
-        data = await player_manager.get_online_players()
-        if data["players"]:
-            players_str = "\n".join(f"  - {p}" for p in data["players"])
-            text = f"👥 Онлайн: {data['count']}/{data['max']}\n{players_str}"
-        else:
-            text = f"👥 Онлайн: {data['count']}/{data['max']}\nНикого нет."
-        await show_menu(callback, text, _players_kb)
-
-    elif action == "banlist":
+    if action == "banlist":
         result = await player_manager.banlist()
         text = result if result.strip() else "Банлист пуст."
         await show_menu(callback, text, _players_kb)
@@ -139,6 +148,37 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
 
     elif action in ("kick", "ban", "pardon", "wl_add", "wl_remove", "op", "deop"):
         await state.update_data(player_action=action)
+        online = await _get_online_names()
+        if online:
+            buttons = []
+            row = []
+            for name in online:
+                row.append(InlineKeyboardButton(
+                    text=name, callback_data=f"plsel:{name[:40]}",
+                ))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            buttons.append([InlineKeyboardButton(
+                text="✏ Ввести вручную", callback_data="pl:manual_name",
+            )])
+            buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="nav:players")])
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+            action_labels = {
+                "kick": "👢 Кик", "ban": "🔨 Бан", "pardon": "🕊 Разбан",
+                "wl_add": "➕ Whitelist", "wl_remove": "➖ Whitelist",
+                "op": "⭐ Дать опера", "deop": "⛔ Снять опера",
+            }
+            await show_menu(callback, f"{action_labels.get(action, action)} — выбери игрока:", kb)
+        else:
+            await state.set_state(PlayerState.waiting_player_name)
+            await callback.message.answer(
+                "Введи ник игрока:", reply_markup=CANCEL_REPLY_KB
+            )
+
+    elif action == "manual_name":
         await state.set_state(PlayerState.waiting_player_name)
         await callback.message.answer(
             "Введи ник игрока:", reply_markup=CANCEL_REPLY_KB
@@ -167,13 +207,79 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
         )
 
 
+@players_router.callback_query(F.data.startswith("plsel:"))
+async def player_selected(callback: CallbackQuery, state: FSMContext):
+    """Handle player selection from inline buttons."""
+    player_name = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    action = data.get("player_action")
+    gamemode = data.get("gamemode")
+
+    if not action and not gamemode:
+        await callback.answer("Действие не выбрано")
+        return
+
+    await callback.answer("Выполняю...")
+
+    if action == "kick":
+        result = await player_manager.kick(player_name)
+    elif action == "ban":
+        result = await player_manager.ban(player_name)
+    elif action == "pardon":
+        result = await player_manager.pardon(player_name)
+    elif action == "wl_add":
+        result = await player_manager.whitelist_add(player_name)
+    elif action == "wl_remove":
+        result = await player_manager.whitelist_remove(player_name)
+    elif action == "op":
+        result = await player_manager.op(player_name)
+    elif action == "deop":
+        result = await player_manager.deop(player_name)
+    elif gamemode:
+        result = await player_manager.gamemode(player_name, gamemode)
+    else:
+        result = "Неизвестное действие."
+
+    logger.info(f"Player action [{callback.from_user.id}]: {action or 'gamemode'} {player_name}")
+    await state.clear()
+
+    response = result if result.strip() else success_text("Команда выполнена.")
+    text = await _players_menu_text()
+    full = f"{response}\n\n{text}"
+    await show_menu(callback, full, _players_kb)
+
+
 @players_router.callback_query(F.data.startswith("gm:"), StateFilter(PlayerState.waiting_gamemode))
 async def gamemode_select(callback: CallbackQuery, state: FSMContext):
     mode = callback.data.split(":")[1]
     await callback.answer()
-    await state.update_data(gamemode=mode)
-    await state.set_state(PlayerState.waiting_player_name)
-    await callback.message.answer("Введи ник игрока:", reply_markup=CANCEL_REPLY_KB)
+    await state.update_data(gamemode=mode, player_action=None)
+    online = await _get_online_names()
+    if online:
+        buttons = []
+        row = []
+        for name in online:
+            row.append(InlineKeyboardButton(
+                text=name, callback_data=f"plsel:{name[:40]}",
+            ))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        buttons.append([InlineKeyboardButton(
+            text="✏ Ввести вручную", callback_data="pl:manual_name",
+        )])
+        buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="nav:players")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        mode_labels = {
+            "survival": "⛏ Выживание", "creative": "🎨 Творческий",
+            "adventure": "🗺 Приключение", "spectator": "👁 Наблюдатель",
+        }
+        await show_menu(callback, f"🎮 {mode_labels.get(mode, mode)} — выбери игрока:", kb)
+    else:
+        await state.set_state(PlayerState.waiting_player_name)
+        await callback.message.answer("Введи ник игрока:", reply_markup=CANCEL_REPLY_KB)
 
 
 @players_router.message(

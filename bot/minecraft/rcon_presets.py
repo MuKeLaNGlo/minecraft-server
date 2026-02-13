@@ -2,6 +2,10 @@
 
 Commands without 'params' execute immediately.
 Commands with 'params' enter FSM to collect each parameter.
+
+Param tuples: (key, prompt, type)
+  type "player" = show online player buttons
+  type "text"   = text input
 """
 
 RCON_CATEGORIES = {
@@ -25,36 +29,36 @@ RCON_CATEGORIES = {
     "gamemode": {
         "label": "🎮 Режим игры",
         "commands": [
-            {"label": "⛏ Выживание", "cmd": "gamemode survival {player}", "params": [("player", "Имя игрока")]},
-            {"label": "🎨 Творческий", "cmd": "gamemode creative {player}", "params": [("player", "Имя игрока")]},
-            {"label": "👁 Наблюдатель", "cmd": "gamemode spectator {player}", "params": [("player", "Имя игрока")]},
-            {"label": "🗺 Приключение", "cmd": "gamemode adventure {player}", "params": [("player", "Имя игрока")]},
+            {"label": "⛏ Выживание", "cmd": "gamemode survival {player}", "params": [("player", "Имя игрока", "player")]},
+            {"label": "🎨 Творческий", "cmd": "gamemode creative {player}", "params": [("player", "Имя игрока", "player")]},
+            {"label": "👁 Наблюдатель", "cmd": "gamemode spectator {player}", "params": [("player", "Имя игрока", "player")]},
+            {"label": "🗺 Приключение", "cmd": "gamemode adventure {player}", "params": [("player", "Имя игрока", "player")]},
         ],
     },
     "tp": {
         "label": "🧭 Телепортация",
         "commands": [
-            {"label": "📍 К игроку", "cmd": "tp {player1} {player2}", "params": [("player1", "Кого телепортировать"), ("player2", "К кому")]},
-            {"label": "🏠 На спавн", "cmd": "tp {player} 0 ~ 0", "params": [("player", "Имя игрока")]},
-            {"label": "📌 На координаты", "cmd": "tp {player} {x} {y} {z}", "params": [("player", "Имя игрока"), ("x", "X координата"), ("y", "Y координата"), ("z", "Z координата")]},
+            {"label": "📍 К игроку", "cmd": "tp {player1} {player2}", "params": [("player1", "Кого телепортировать", "player"), ("player2", "К кому", "player")]},
+            {"label": "🏠 На спавн", "cmd": "tp {player} 0 ~ 0", "params": [("player", "Имя игрока", "player")]},
+            {"label": "📌 На координаты", "cmd": "tp {player} {x} {y} {z}", "params": [("player", "Имя игрока", "player"), ("x", "X координата", "text"), ("y", "Y координата", "text"), ("z", "Z координата", "text")]},
         ],
     },
     "give": {
         "label": "🎁 Выдать",
         "commands": [
-            {"label": "💎 Алмазы x64", "cmd": "give {player} diamond 64", "params": [("player", "Имя игрока")]},
-            {"label": "🍖 Еда x64", "cmd": "give {player} cooked_beef 64", "params": [("player", "Имя игрока")]},
-            {"label": "🏹 Оружие", "cmd": "give {player} diamond_sword 1", "params": [("player", "Имя игрока")]},
-            {"label": "✏ Свой предмет", "cmd": "give {player} {item} {count}", "params": [("player", "Имя игрока"), ("item", "ID предмета (напр. iron_ingot)"), ("count", "Количество")]},
+            {"label": "💎 Алмазы x64", "cmd": "give {player} diamond 64", "params": [("player", "Имя игрока", "player")]},
+            {"label": "🍖 Еда x64", "cmd": "give {player} cooked_beef 64", "params": [("player", "Имя игрока", "player")]},
+            {"label": "🏹 Оружие", "cmd": "give {player} diamond_sword 1", "params": [("player", "Имя игрока", "player")]},
+            {"label": "✏ Свой предмет", "cmd": "give {player} {item} {count}", "params": [("player", "Имя игрока", "player"), ("item", "ID предмета (напр. iron_ingot)", "text"), ("count", "Количество", "text")]},
         ],
     },
     "server": {
         "label": "🖥 Сервер",
         "commands": [
             {"label": "📋 Онлайн", "cmd": "list"},
-            {"label": "💬 Объявление", "cmd": "say {message}", "params": [("message", "Текст объявления")]},
+            {"label": "💬 Объявление", "cmd": "say {message}", "params": [("message", "Текст объявления", "text")]},
             {"label": "🔒 Сохранить", "cmd": "save-all"},
-            {"label": "🔨 Сложность", "cmd": "difficulty {level}", "params": [("level", "peaceful/easy/normal/hard")]},
+            {"label": "🔨 Сложность", "cmd": "difficulty {level}", "params": [("level", "peaceful/easy/normal/hard", "text")]},
         ],
     },
 }

@@ -9,6 +9,7 @@ from aiogram.types import (
 )
 
 from db.database import db
+from minecraft.player_manager import player_manager
 from minecraft.rcon import rcon
 from minecraft.rcon_presets import RCON_CATEGORIES, get_command
 from states.states import RconState
@@ -38,6 +39,53 @@ def _console_main_kb() -> InlineKeyboardMarkup:
     buttons.append([InlineKeyboardButton(text="⌨ Ввести команду", callback_data="rcon:manual")])
     buttons.append(back_row("main"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _get_online_names() -> list[str]:
+    try:
+        data = await player_manager.get_online_players()
+        return data.get("players", [])
+    except Exception:
+        return []
+
+
+async def _ask_param(reply_func, state, param_tuple, cmd_text: str, first: bool = False):
+    """Ask for a parameter — show player buttons if type is 'player', else text input.
+
+    reply_func: an awaitable like message.answer or callback.message.answer
+    """
+    param_key, param_prompt, param_type = param_tuple
+
+    if param_type == "player":
+        online = await _get_online_names()
+        if online:
+            buttons = []
+            row = []
+            for name in online:
+                row.append(InlineKeyboardButton(
+                    text=name, callback_data=f"rconpl:{name[:40]}",
+                ))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            buttons.append([InlineKeyboardButton(
+                text="✏ Ввести вручную", callback_data="rcon:manual_param",
+            )])
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+            prefix = f"Команда: <code>{cmd_text}</code>\n\n" if first else ""
+            await reply_func(
+                f"{prefix}<b>{param_prompt}</b> — выбери игрока:", reply_markup=kb,
+            )
+            return
+
+    # Text param — FSM text input
+    await state.set_state(RconState.waiting_preset_params)
+    prefix = f"Команда: <code>{cmd_text}</code>\n\n" if first else ""
+    await reply_func(
+        f"{prefix}Введи <b>{param_prompt}</b>:", reply_markup=CANCEL_REPLY_KB,
+    )
 
 
 @console_router.callback_query(F.data == "nav:console")
@@ -100,12 +148,7 @@ async def rcon_callback(callback: CallbackQuery, state: FSMContext):
                 preset_param_index=0,
             )
             await state.set_state(RconState.waiting_preset_params)
-            param_key, param_prompt = params[0]
-            await callback.message.answer(
-                f"Команда: <code>{cmd['cmd']}</code>\n\n"
-                f"Введи <b>{param_prompt}</b>:",
-                reply_markup=CANCEL_REPLY_KB,
-            )
+            await _ask_param(callback.message.answer, state, params[0], cmd["cmd"], first=True)
             return
 
         # Execute immediately
@@ -129,6 +172,23 @@ async def rcon_callback(callback: CallbackQuery, state: FSMContext):
         ])
         await show_menu(callback, text, kb)
 
+    elif action == "manual_param":
+        # Switch from player buttons to text input for current param
+        await callback.answer()
+        await state.set_state(RconState.waiting_preset_params)
+        data = await state.get_data()
+        cmd = get_command(data.get("preset_cat", ""), data.get("preset_idx", 0))
+        param_index = data.get("preset_param_index", 0)
+        if cmd:
+            params = cmd.get("params", [])
+            if param_index < len(params):
+                _, prompt, _ = params[param_index]
+                await callback.message.answer(
+                    f"Введи <b>{prompt}</b>:", reply_markup=CANCEL_REPLY_KB,
+                )
+                return
+        await callback.message.answer("Введи значение:", reply_markup=CANCEL_REPLY_KB)
+
     elif action == "manual":
         await callback.answer()
         await state.set_state(RconState.waiting_command)
@@ -140,6 +200,66 @@ async def rcon_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "back":
         await callback.answer()
         await show_menu(callback, CONSOLE_TEXT, _console_main_kb())
+
+
+async def _collect_param_and_continue(state: FSMContext, value: str, reply_func, uid: str):
+    """Collect a param value, ask next or execute. Returns True if handled."""
+    data = await state.get_data()
+    cat_key = data["preset_cat"]
+    cmd_idx = data["preset_idx"]
+    params_collected = data.get("preset_params", {})
+    param_index = data.get("preset_param_index", 0)
+
+    cmd = get_command(cat_key, cmd_idx)
+    if not cmd:
+        await state.clear()
+        await reply_func(error_text("Команда не найдена."))
+        return
+
+    params = cmd.get("params", [])
+    param_key = params[param_index][0]
+    params_collected[param_key] = value
+
+    # Check if more params needed
+    next_index = param_index + 1
+    if next_index < len(params):
+        await state.update_data(preset_params=params_collected, preset_param_index=next_index)
+        await _ask_param(reply_func, state, params[next_index], cmd["cmd"])
+        return
+
+    # All params collected — build and execute command
+    await state.clear()
+    command_text = cmd["cmd"]
+    for k, v in params_collected.items():
+        command_text = command_text.replace(f"{{{k}}}", v)
+
+    is_admin = await db.check_admin(uid)
+    first_word = command_text.split(" ", 1)[0].lower()
+    if not is_admin and await db.command_exists(first_word):
+        await reply_func("⛔ Команда заблокирована.")
+        return
+
+    result = await rcon.execute(command_text)
+    response = truncate(result) if result.strip() else "(пустой ответ)"
+
+    logger.info(f"RCON preset [{uid}]: {command_text} -> {result[:200]}")
+    await log_to_group(bot, f"RCON [{uid}]: {command_text}")
+
+    text = (
+        success_text(f"Выполнено: <code>{command_text}</code>") + "\n\n"
+        f"Ответ: <code>{response}</code>"
+    )
+    await reply_func(text)
+    await reply_func(CONSOLE_TEXT, reply_markup=_console_main_kb(), parse_mode="HTML")
+
+
+@console_router.callback_query(F.data.startswith("rconpl:"))
+async def rcon_player_selected(callback: CallbackQuery, state: FSMContext):
+    """Handle player selection from inline buttons in RCON presets."""
+    player_name = callback.data.split(":", 1)[1]
+    await callback.answer()
+    uid = str(callback.from_user.id)
+    await _collect_param_and_continue(state, player_name, callback.message.answer, uid)
 
 
 @console_router.message(
@@ -157,57 +277,8 @@ async def process_preset_param(message: Message, state: FSMContext):
     if not value:
         await message.answer("Введи значение:")
         return
-
-    data = await state.get_data()
-    cat_key = data["preset_cat"]
-    cmd_idx = data["preset_idx"]
-    params_collected = data.get("preset_params", {})
-    param_index = data.get("preset_param_index", 0)
-
-    cmd = get_command(cat_key, cmd_idx)
-    if not cmd:
-        await state.clear()
-        await message.answer(error_text("Команда не найдена."))
-        return
-
-    params = cmd.get("params", [])
-    param_key, _ = params[param_index]
-    params_collected[param_key] = value
-
-    # Check if more params needed
-    next_index = param_index + 1
-    if next_index < len(params):
-        await state.update_data(preset_params=params_collected, preset_param_index=next_index)
-        next_key, next_prompt = params[next_index]
-        await message.answer(f"Введи <b>{next_prompt}</b>:")
-        return
-
-    # All params collected — build and execute command
-    await state.clear()
-    command_text = cmd["cmd"]
-    for k, v in params_collected.items():
-        command_text = command_text.replace(f"{{{k}}}", v)
-
     uid = str(message.from_user.id)
-    is_admin = await db.check_admin(uid)
-
-    first_word = command_text.split(" ", 1)[0].lower()
-    if not is_admin and await db.command_exists(first_word):
-        await message.answer("⛔ Команда заблокирована.")
-        return
-
-    result = await rcon.execute(command_text)
-    response = truncate(result) if result.strip() else "(пустой ответ)"
-
-    logger.info(f"RCON preset [{uid}]: {command_text} -> {result[:200]}")
-    await log_to_group(bot, f"RCON [{uid}]: {command_text}")
-
-    text = (
-        success_text(f"Выполнено: <code>{command_text}</code>") + "\n\n"
-        f"Ответ: <code>{response}</code>"
-    )
-    await message.answer(text)
-    await message.answer(CONSOLE_TEXT, reply_markup=_console_main_kb(), parse_mode="HTML")
+    await _collect_param_and_continue(state, value, message.answer, uid)
 
 
 @console_router.message(StateFilter(RconState.waiting_command))
