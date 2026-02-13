@@ -8,9 +8,13 @@ from minecraft.docker_manager import docker_manager
 from utils.logger import logger
 
 # Log line patterns
-JOIN_RE = re.compile(r"\[Server thread/INFO\]:?\s+(\w+) joined the game")
-LEAVE_RE = re.compile(r"\[Server thread/INFO\]:?\s+(\w+) left the game")
-CHAT_RE = re.compile(r"\[Server thread/INFO\]:?\s+<(\w+)>\s+(.+)")
+# Forge format: [Server thread/INFO] [minecraft/MinecraftServer]: Player joined the game
+# Vanilla format: [Server thread/INFO]: Player joined the game
+# Also strip ANSI escape codes first
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|>\.\.\.\.\[K|\[m")
+JOIN_RE = re.compile(r"\[Server thread/INFO\].*?:\s+(\w+) joined the game")
+LEAVE_RE = re.compile(r"\[Server thread/INFO\].*?:\s+(\w+) left the game")
+CHAT_RE = re.compile(r"\[Server thread/INFO\].*?:\s+<(\w+)>\s+(.+)")
 
 EventHandler = Callable[["LogEvent"], Awaitable[None]]
 
@@ -84,6 +88,7 @@ class LogWatcher:
                 await self._dispatch(event)
 
     def _parse_line(self, line: str) -> Optional[LogEvent]:
+        line = _ANSI_RE.sub("", line)
         match = JOIN_RE.search(line)
         if match:
             return LogEvent(event_type="join", player_name=match.group(1))

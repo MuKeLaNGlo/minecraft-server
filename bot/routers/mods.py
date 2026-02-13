@@ -153,12 +153,20 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
             if installed:
                 mod_data = await db.get_mod_by_slug(slug)
                 if mod_data:
-                    # (id, slug, name, version_id, filename, sha512, game_version, loader)
                     inst_file = mod_data[4] if len(mod_data) > 4 else ""
                     if inst_file:
                         text += f"\n\n✅ Установлен: <code>{inst_file}</code>"
                 buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"mod:remove:{slug}")])
             else:
+                # Show required dependencies before install
+                if versions:
+                    try:
+                        req_deps = await mod_manager._resolve_dependencies(versions[0])
+                        if req_deps:
+                            dep_names = ", ".join(d["name"] for d in req_deps)
+                            text += f"\n\n📎 Зависимости: {dep_names}"
+                    except Exception:
+                        pass
                 buttons.append([InlineKeyboardButton(text="📥 Установить", callback_data=f"mod:install:{slug}")])
             buttons.append([InlineKeyboardButton(
                 text="🔗 Modrinth", url=f"https://modrinth.com/mod/{slug}"
@@ -181,13 +189,19 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("⏳ Скачиваю и устанавливаю мод...")
         result = await mod_manager.install_mod(slug)
         if result["success"]:
-            text = success_text(
+            lines = [
                 f"Мод установлен!\n"
                 f"Название: {result['name']}\n"
                 f"Версия: {result['version']}\n"
-                f"Файл: <code>{result['filename']}</code>\n\n"
-                f"Перезапусти сервер для применения."
-            )
+                f"Файл: <code>{result['filename']}</code>"
+            ]
+            deps = result.get("deps", [])
+            if deps:
+                lines.append(f"\n📎 Зависимости ({len(deps)}):")
+                for d in deps:
+                    lines.append(f"  + {d['name']} {d['version']}")
+            lines.append("\nПерезапусти сервер для применения.")
+            text = success_text("\n".join(lines))
         else:
             text = error_text(result["error"])
         await show_menu(callback, text, _mods_kb)

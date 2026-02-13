@@ -51,9 +51,11 @@ async def on_startup() -> None:
 
     # Session tracking (always active)
     async def _session_open(event: LogEvent):
+        logger.info(f"Player joined: {event.player_name}")
         await db.open_session(event.player_name)
 
     async def _session_close(event: LogEvent):
+        logger.info(f"Player left: {event.player_name}")
         await db.close_session(event.player_name)
 
     log_watcher.on("join", _session_open)

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -7,6 +8,11 @@ from typing import Dict, List
 from core.config import config
 from minecraft.server_config import server_config
 from utils.logger import logger
+
+# itzg/minecraft-server runs as uid=1000 gid=1000 inside the container.
+# Bot runs as root, so we must chown world dirs to match.
+_MC_UID = 1000
+_MC_GID = 1000
 
 
 class WorldManager:
@@ -74,6 +80,7 @@ class WorldManager:
 
         try:
             world_dir.mkdir(parents=True)
+            os.chown(world_dir, _MC_UID, _MC_GID)
             logger.info(f"World created: {name}")
             return {
                 "success": True,

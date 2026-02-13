@@ -350,6 +350,29 @@ class Database:
         )
 
 
+    async def get_player_sessions(self, player_name: str, limit: int = 15) -> List[Any]:
+        """Get recent sessions for a specific player."""
+        return await self.fetch_all(
+            """SELECT joined_at, left_at,
+                   CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                   AS duration_secs
+               FROM player_sessions
+               WHERE player_name = ?
+               ORDER BY joined_at DESC
+               LIMIT ?""",
+            (player_name, limit),
+        )
+
+    async def get_session_log(self, limit: int = 25) -> List[Any]:
+        """Get recent join/leave events across all players."""
+        return await self.fetch_all(
+            """SELECT player_name, joined_at, left_at
+               FROM player_sessions
+               ORDER BY joined_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+
     async def get_recent_players(self, hours: int = 24) -> List[Any]:
         """Get players active in the last N hours, sorted: online first, then by last_seen desc."""
         return await self.fetch_all(

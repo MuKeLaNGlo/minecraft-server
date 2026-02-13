@@ -133,18 +133,95 @@ async def players_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "stats":
         stats = await db.get_all_player_stats()
         if not stats:
-            text = "Статистика пока пуста."
+            text = "Статистика пока пуста.\n\nДанные появятся когда игроки зайдут и выйдут с сервера."
+            await show_menu(callback, text, _players_kb)
+            return
+
+        lines = ["<b>📊 Статистика игроков</b>\n"]
+        for s in stats[:15]:
+            name, sessions, total_secs, last_seen, is_online = s
+            status = "🟢" if is_online else "⚪"
+            lines.append(
+                f"{status} <b>{name}</b>: {format_duration(total_secs)} "
+                f"({sessions} сессий)"
+            )
+        text = "\n".join(lines)
+
+        buttons = []
+        row = []
+        for s in stats[:15]:
+            name = s[0]
+            row.append(InlineKeyboardButton(
+                text=name, callback_data=f"pl:pstat:{name[:40]}",
+            ))
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        buttons.append([InlineKeyboardButton(text="📋 Лог входов/выходов", callback_data="pl:sesslog")])
+        buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="nav:players")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await show_menu(callback, text, kb)
+
+    elif action == "pstat":
+        # Per-player detail stats
+        pname = ":".join(parts[2:])
+        pstats = await db.get_player_stats(pname)
+        if not pstats:
+            await show_menu(callback, f"Нет данных по игроку <b>{pname}</b>.", _players_kb)
+            return
+
+        status = "🟢 Онлайн" if pstats["online"] else "⚪ Оффлайн"
+        avg_secs = pstats["total_seconds"] // max(pstats["session_count"], 1)
+
+        lines = [
+            f"<b>📊 {pname}</b> — {status}\n",
+            f"🕐 Общее время: <b>{format_duration(pstats['total_seconds'])}</b>",
+            f"📈 Сессий: <b>{pstats['session_count']}</b>",
+            f"⏱ Средняя сессия: <b>{format_duration(avg_secs)}</b>",
+            f"📅 Последний вход: {_format_last_seen(pstats['last_seen'])}",
+        ]
+        if pstats["online"] and pstats["current_session_start"]:
+            lines.append(f"▶ Текущая сессия с: {pstats['current_session_start'][:16]}")
+
+        # Recent sessions
+        sessions = await db.get_player_sessions(pname, limit=10)
+        if sessions:
+            lines.append("\n<b>Последние сессии:</b>")
+            for joined, left, dur in sessions:
+                j_short = joined[5:16] if joined else "?"  # MM-DD HH:MM
+                if left:
+                    lines.append(f"  {j_short} — {format_duration(dur)}")
+                else:
+                    lines.append(f"  {j_short} — ▶ сейчас играет")
+
+        text = "\n".join(lines)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ К статистике", callback_data="pl:stats")],
+        ])
+        await show_menu(callback, text, kb)
+
+    elif action == "sesslog":
+        # Global session log
+        sessions = await db.get_session_log(limit=25)
+        if not sessions:
+            text = "Логов пока нет."
         else:
-            lines = ["<b>📊 Статистика игроков</b>\n"]
-            for s in stats[:15]:
-                name, sessions, total_secs, last_seen, is_online = s
-                status = "🟢" if is_online else "⚪"
-                lines.append(
-                    f"{status} <b>{name}</b>: {format_duration(total_secs)} "
-                    f"({sessions} сессий)"
-                )
+            lines = ["<b>📋 Лог входов/выходов</b>\n"]
+            for name, joined, left in sessions:
+                j_short = joined[5:16] if joined else "?"
+                if left:
+                    l_short = left[11:16] if left else "?"
+                    lines.append(f"  {j_short} — {l_short}  <b>{name}</b>")
+                else:
+                    lines.append(f"  {j_short} — ▶ ...     <b>{name}</b>")
             text = "\n".join(lines)
-        await show_menu(callback, text, _players_kb)
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ К статистике", callback_data="pl:stats")],
+        ])
+        await show_menu(callback, text, kb)
 
     elif action in ("kick", "ban", "pardon", "wl_add", "wl_remove", "op", "deop"):
         await state.update_data(player_action=action)

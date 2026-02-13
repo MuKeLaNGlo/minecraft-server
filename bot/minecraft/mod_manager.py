@@ -1,6 +1,6 @@
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import aiohttp
 
@@ -14,8 +14,89 @@ class ModManager:
     def __init__(self):
         self.mods_dir = Path(config.mc_data_path) / "mods"
 
-    async def install_mod(self, project_slug: str) -> Dict:
-        """Download and install the latest compatible version of a mod."""
+    async def _resolve_dependencies(
+        self, version: Dict, _seen: Optional[Set[str]] = None
+    ) -> List[Dict]:
+        """Recursively resolve required dependencies for a version.
+
+        Returns list of {"project_id", "slug", "name"} for deps that need installing.
+        """
+        if _seen is None:
+            _seen = set()
+
+        deps_to_install = []
+        for dep in version.get("dependencies", []):
+            if dep.get("dependency_type") != "required":
+                continue
+            project_id = dep.get("project_id")
+            if not project_id or project_id in _seen:
+                continue
+            _seen.add(project_id)
+
+            # Check if already installed (by slug or project_id)
+            try:
+                project = await modrinth.get_project(project_id)
+            except Exception:
+                continue
+            slug = project.get("slug", project_id)
+            name = project.get("title", slug)
+
+            if await db.mod_installed(slug):
+                continue
+
+            # Check compatible versions exist
+            dep_versions = await modrinth.get_versions(slug)
+            if not dep_versions:
+                continue
+
+            deps_to_install.append({
+                "project_id": project_id,
+                "slug": slug,
+                "name": name,
+            })
+
+            # Recurse into this dependency's own dependencies
+            sub_deps = await self._resolve_dependencies(dep_versions[0], _seen)
+            deps_to_install.extend(sub_deps)
+
+        return deps_to_install
+
+    async def install_mod_with_deps(self, project_slug: str) -> Dict:
+        """Install a mod and all its required dependencies.
+
+        Returns {success, name, version, filename, deps: [{name, version, filename}]}.
+        """
+        # First resolve what we need to install
+        if await db.mod_installed(project_slug):
+            return {"success": False, "error": "Мод уже установлен."}
+
+        versions = await modrinth.get_versions(project_slug)
+        if not versions:
+            return {"success": False, "error": "Нет совместимых версий для текущего лоадера/версии."}
+
+        version = versions[0]
+        deps = await self._resolve_dependencies(version)
+
+        # Install dependencies first
+        installed_deps = []
+        for dep in deps:
+            result = await self._install_single(dep["slug"])
+            if result["success"]:
+                installed_deps.append({
+                    "name": result["name"],
+                    "version": result["version"],
+                    "filename": result["filename"],
+                })
+            else:
+                logger.warning(f"Dep install failed ({dep['slug']}): {result.get('error')}")
+
+        # Install the main mod
+        result = await self._install_single(project_slug)
+        result["deps"] = installed_deps
+        return result
+
+    async def _install_single(self, project_slug: str) -> Dict:
+        """Download and install a single mod (no dependency resolution)."""
         # Get compatible versions
         versions = await modrinth.get_versions(project_slug)
         if not versions:
@@ -91,6 +172,10 @@ class ModManager:
             "filename": filename,
             "version": version.get("version_number", "?"),
         }
+
+    async def install_mod(self, project_slug: str) -> Dict:
+        """Install a mod with automatic dependency resolution."""
+        return await self.install_mod_with_deps(project_slug)
 
     async def remove_mod(self, slug: str) -> Dict:
         """Remove mod file and database record."""
