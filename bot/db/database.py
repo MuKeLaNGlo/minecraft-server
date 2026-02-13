@@ -437,6 +437,92 @@ class Database:
             (player_name, limit),
         )
 
+    async def get_hourly_activity(self, since: str = "-7 days", player_name: str = "") -> List[Any]:
+        """Get activity aggregated by hour of day (0-23).
+
+        Returns list of (hour, total_seconds, session_count).
+        """
+        where = "WHERE joined_at >= datetime('now', ?)"
+        params: list = [since]
+        if player_name:
+            where += " AND player_name = ?"
+            params.append(player_name)
+        return await self.fetch_all(
+            f"""SELECT
+                    CAST(strftime('%H', joined_at) AS INTEGER) as hour,
+                    COALESCE(SUM(
+                        CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                    ), 0) as total_seconds,
+                    COUNT(*) as session_count
+                FROM player_sessions
+                {where}
+                GROUP BY hour
+                ORDER BY hour""",
+            tuple(params),
+        )
+
+    async def get_daily_activity(self, since: str = "-30 days", player_name: str = "") -> List[Any]:
+        """Get activity aggregated by date.
+
+        Returns list of (date_str, total_seconds, session_count, unique_players).
+        """
+        where = "WHERE joined_at >= datetime('now', ?)"
+        params: list = [since]
+        if player_name:
+            where += " AND player_name = ?"
+            params.append(player_name)
+        return await self.fetch_all(
+            f"""SELECT
+                    strftime('%Y-%m-%d', joined_at) as day,
+                    COALESCE(SUM(
+                        CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                    ), 0) as total_seconds,
+                    COUNT(*) as session_count,
+                    COUNT(DISTINCT player_name) as unique_players
+                FROM player_sessions
+                {where}
+                GROUP BY day
+                ORDER BY day""",
+            tuple(params),
+        )
+
+    async def get_player_first_seen(self, player_name: str) -> Optional[str]:
+        """Get the first join timestamp for a player."""
+        row = await self.fetch_one(
+            "SELECT MIN(joined_at) FROM player_sessions WHERE player_name = ?",
+            (player_name,),
+        )
+        return row[0] if row and row[0] else None
+
+    async def get_top_players(self, since: str = "", limit: int = 10) -> List[Any]:
+        """Get top players by total play time.
+
+        Returns list of (player_name, total_seconds, session_count, last_seen, is_online, first_seen).
+        """
+        where = ""
+        params: list = []
+        if since:
+            where = "WHERE joined_at >= datetime('now', ?) OR left_at IS NULL"
+            params.append(since)
+        params.append(limit)
+        return await self.fetch_all(
+            f"""SELECT
+                    player_name,
+                    COALESCE(SUM(
+                        CAST((julianday(COALESCE(left_at, datetime('now'))) - julianday(joined_at)) * 86400 AS INTEGER)
+                    ), 0) as total_seconds,
+                    COUNT(*) as session_count,
+                    MAX(joined_at) as last_seen,
+                    MAX(CASE WHEN left_at IS NULL THEN 1 ELSE 0 END) as is_online,
+                    MIN(joined_at) as first_seen
+                FROM player_sessions
+                {where}
+                GROUP BY player_name
+                ORDER BY total_seconds DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+
     async def get_recent_players(self, hours: int = 24) -> List[Any]:
         """Get players active in the last N hours, sorted: online first, then by last_seen desc."""
         return await self.fetch_all(

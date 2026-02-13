@@ -55,6 +55,9 @@ async def main_menu_kb(user_id: str | int) -> InlineKeyboardMarkup:
         ])
         buttons.append([
             InlineKeyboardButton(text="📊 Мониторинг", callback_data="nav:monitoring"),
+            InlineKeyboardButton(text="📈 Статистика", callback_data="nav:stats"),
+        ])
+        buttons.append([
             InlineKeyboardButton(text="⏰ Планировщик", callback_data="nav:scheduler"),
         ])
         buttons.append([
@@ -71,6 +74,7 @@ async def main_menu_kb(user_id: str | int) -> InlineKeyboardMarkup:
         ])
         buttons.append([
             InlineKeyboardButton(text="🎮 RCON", callback_data="nav:console"),
+            InlineKeyboardButton(text="📈 Статистика", callback_data="nav:stats"),
         ])
     else:
         buttons.append([

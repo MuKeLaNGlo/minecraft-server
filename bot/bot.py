@@ -19,6 +19,7 @@ from routers.monitoring import monitoring_router
 from routers.scheduler import scheduler_router
 from routers.console import console_router
 from routers.worlds import worlds_router
+from routers.stats import stats_router
 from routers.chat_bridge import chat_bridge_router
 from routers.bot_settings import bot_settings_router
 from routers.common import common_router
@@ -199,6 +200,7 @@ async def main() -> None:
     dp.include_router(scheduler_router)
     dp.include_router(console_router)
     dp.include_router(worlds_router)
+    dp.include_router(stats_router)
     dp.include_router(chat_bridge_router)
     dp.include_router(common_router)  # last — catch-all /start + nav:main
 
