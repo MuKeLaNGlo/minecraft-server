@@ -1,4 +1,7 @@
 import asyncio
+import traceback
+
+from aiogram.types import ErrorEvent
 
 from core.config import config
 from core.loader import bot, dp
@@ -132,6 +135,52 @@ async def on_shutdown() -> None:
     await modrinth.close()
     await db.disconnect()
     logger.info("Бот остановлен")
+
+
+_last_error_notify: float = 0
+
+
+@dp.errors()
+async def global_error_handler(event: ErrorEvent) -> bool:
+    """Catch unhandled exceptions and notify super admin."""
+    global _last_error_notify
+    exc = event.exception
+    logger.error(f"Unhandled exception: {exc}", exc_info=exc)
+
+    if not config.super_admin_id:
+        return True
+
+    # Rate limit: max 1 error message per 60 seconds
+    import time
+    now = time.monotonic()
+    if now - _last_error_notify < 60:
+        return True
+    _last_error_notify = now
+
+    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    tb_short = "".join(tb[-3:])[:1500]
+
+    update_info = ""
+    if event.update and event.update.message:
+        uid = event.update.message.from_user.id
+        update_info = f"\nUser: <code>{uid}</code>"
+    elif event.update and event.update.callback_query:
+        uid = event.update.callback_query.from_user.id
+        data = event.update.callback_query.data
+        update_info = f"\nUser: <code>{uid}</code>\nCallback: <code>{data}</code>"
+
+    text = (
+        f"🚨 <b>Ошибка в боте</b>\n\n"
+        f"<code>{type(exc).__name__}: {str(exc)[:300]}</code>"
+        f"{update_info}\n\n"
+        f"<pre>{tb_short}</pre>"
+    )
+    try:
+        await bot.send_message(config.super_admin_id, text)
+    except Exception as e:
+        logger.warning(f"Failed to notify admin about error: {e}")
+
+    return True
 
 
 async def main() -> None:

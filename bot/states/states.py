@@ -30,6 +30,7 @@ class ConfigState(StatesGroup):
 class SchedulerState(StatesGroup):
     waiting_cron = State()
     waiting_extra = State()
+    waiting_time = State()
 
 
 class PlayerState(StatesGroup):
