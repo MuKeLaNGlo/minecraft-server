@@ -101,9 +101,24 @@ async def on_startup() -> None:
         except Exception:
             pass
 
+    async def _notify_server_ready(event: LogEvent):
+        if await db.get_setting("notifications_enabled") != "1":
+            return
+        chat_id = await db.get_setting("notifications_chat_id")
+        if not chat_id:
+            return
+        try:
+            secs = event.message or "?"
+            await bot.send_message(
+                chat_id, f"✅ Сервер запущен и готов к игре! ({secs}s)"
+            )
+        except Exception:
+            pass
+
     log_watcher.on("join", _notify_join)
     log_watcher.on("leave", _notify_leave)
     log_watcher.on("chat", _bridge_mc_to_tg)
+    log_watcher.on("server_ready", _notify_server_ready)
 
     await log_watcher.start(interval=config.log_watcher_interval)
 

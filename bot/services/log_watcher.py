@@ -15,15 +15,16 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|>\.\.\.\.\[K|\[m")
 JOIN_RE = re.compile(r"\[Server thread/INFO\].*?:\s+(\w+) joined the game")
 LEAVE_RE = re.compile(r"\[Server thread/INFO\].*?:\s+(\w+) left the game")
 CHAT_RE = re.compile(r"\[Server thread/INFO\].*?:\s+<(\w+)>\s+(.+)")
+READY_RE = re.compile(r"\[Server thread/INFO\].*?:\s+Done \(([0-9.]+)s\)!")
 
 EventHandler = Callable[["LogEvent"], Awaitable[None]]
 
 
 @dataclass
 class LogEvent:
-    event_type: str  # "join", "leave", "chat"
-    player_name: str
-    message: Optional[str] = None  # only for "chat"
+    event_type: str  # "join", "leave", "chat", "server_ready"
+    player_name: str = ""
+    message: Optional[str] = None  # "chat" text or startup time for "server_ready"
     raw_line: str = ""
 
 
@@ -103,6 +104,13 @@ class LogWatcher:
                 event_type="chat",
                 player_name=match.group(1),
                 message=match.group(2),
+            )
+
+        match = READY_RE.search(line)
+        if match:
+            return LogEvent(
+                event_type="server_ready",
+                message=match.group(1),  # startup time in seconds
             )
 
         return None
