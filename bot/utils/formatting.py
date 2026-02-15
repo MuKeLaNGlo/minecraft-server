@@ -17,7 +17,10 @@ def strip_ansi(text: str) -> str:
 
 
 _RCON_NOISE = re.compile(
-    r".*\[RCON (?:Client|Listener)[^\]]*\].*$",
+    r"^.*(?:"
+    r"\[RCON (?:Client|Listener)[^\]]*\]"  # [RCON Client /x.x.x.x]
+    r"|Thread RCON (?:Client|Listener) /\S+ (?:started|shutting down)"  # Thread RCON Client /x.x.x.x started
+    r").*$",
     re.MULTILINE,
 )
 

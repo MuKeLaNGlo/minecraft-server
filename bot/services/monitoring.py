@@ -61,25 +61,51 @@ class MonitoringService:
                 )
 
     async def get_tps(self) -> Optional[float]:
-        """Get TPS from server. Strategy depends on loader type."""
+        """Get TPS from server. Tries multiple commands in priority order."""
         if config.mc_loader in PLUGIN_LOADERS:
             # Paper/Purpur/Spigot — built-in `tps` command
             result = await rcon.execute("tps")
             tps = self._parse_tps_paper(result)
             if tps is not None:
                 return tps
-            # Fallback to spark plugin
-            result = await rcon.execute("spark tps")
-            return self._parse_tps_spark(result)
-        else:
-            # Forge/Fabric/NeoForge — `forge tps` command
+
+        # Vanilla `mspt` command (1.20.1+, works on all loaders)
+        result = await rcon.execute("mspt")
+        tps = self._parse_mspt(result)
+        if tps is not None:
+            return tps
+
+        if config.mc_loader not in PLUGIN_LOADERS:
+            # Forge/NeoForge — `forge tps`
             result = await rcon.execute("forge tps")
             tps = self._parse_tps(result)
             if tps is not None:
                 return tps
-            # Fallback to spark mod
-            result = await rcon.execute("spark tps")
-            return self._parse_tps_spark(result)
+
+        # Last resort — spark plugin/mod
+        result = await rcon.execute("spark tps")
+        return self._parse_tps_spark(result)
+
+    def _parse_mspt(self, text: str) -> Optional[float]:
+        """Parse vanilla/forge mspt output and convert to TPS.
+
+        Format: Server tick times (avg/min/max) from last 5s, 10s, 1m:
+                ◴ 0.7/0.3/1.6, 0.6/0.3/1.6, 1.0/0.3/461.1
+        We take the 5s average (first number) and compute TPS = min(20, 1000/mspt).
+        """
+        # Strip color codes
+        clean = re.sub(r"\x1b\[[0-9;]*m|§[0-9a-fk-or]", "", text)
+        # Find the first group of avg/min/max: e.g. "0.7/0.3/1.6"
+        match = re.search(r"([\d.]+)/([\d.]+)/([\d.]+)", clean)
+        if match:
+            try:
+                avg_mspt = float(match.group(1))
+                if avg_mspt <= 0:
+                    return 20.0
+                return min(20.0, round(1000.0 / avg_mspt, 1))
+            except (ValueError, ZeroDivisionError):
+                pass
+        return None
 
     def _parse_tps(self, text: str) -> Optional[float]:
         """Parse forge tps output."""

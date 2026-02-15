@@ -283,7 +283,20 @@ async def main() -> None:
     dp.include_router(common_router)  # last — catch-all /start + nav:main
 
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+
+    if config.webapp_domain and config.jwt_secret:
+        import uvicorn
+        from api.app import create_app
+
+        app = create_app()
+        uvi_config = uvicorn.Config(
+            app, host="0.0.0.0", port=config.api_port, log_level="warning"
+        )
+        server = uvicorn.Server(uvi_config)
+        logger.info(f"Web API запускается на порту {config.api_port}")
+        await asyncio.gather(dp.start_polling(bot), server.serve())
+    else:
+        await dp.start_polling(bot)
 
 
 if __name__ == "__main__":

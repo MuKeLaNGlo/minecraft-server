@@ -36,6 +36,11 @@ class Config:
     # LogWatcher
     log_watcher_interval: int = field(default_factory=lambda: _env_int("LOG_WATCHER_INTERVAL", 3))
 
+    # Web App
+    webapp_domain: str = field(default_factory=lambda: _env_str("WEBAPP_DOMAIN"))
+    api_port: int = field(default_factory=lambda: _env_int("API_PORT", 8080))
+    jwt_secret: str = field(default_factory=lambda: _env_str("JWT_SECRET"))
+
     # Paths
     mc_data_path: str = "/mc-data"
     backups_path: str = "/backups"
