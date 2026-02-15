@@ -17,7 +17,7 @@ def strip_ansi(text: str) -> str:
 
 
 _RCON_NOISE = re.compile(
-    r".*\[RCON Client /[\d.]+ #\d+/INFO\]:.*$",
+    r".*\[RCON (?:Client|Listener)[^\]]*\].*$",
     re.MULTILINE,
 )
 
@@ -33,10 +33,10 @@ def clean_log(text: str) -> str:
 
 
 def truncate(text: str, max_length: int = 4000) -> str:
-    """Truncate text to fit Telegram message limit."""
+    """Truncate text to fit Telegram message limit (keeps end)."""
     if len(text) <= max_length:
         return text
-    return text[:max_length] + "\n... (обрезано)"
+    return "... (обрезано)\n" + text[-max_length:]
 
 
 def format_bytes(size: int) -> str:

@@ -152,10 +152,14 @@ class ModManager:
         filepath = self.mods_dir / filename
         filepath.write_bytes(data)
 
-        # Get project info for display name
+        # Get project info for display name and side info
+        client_side = "unknown"
+        server_side = "unknown"
         try:
             project = await modrinth.get_project(project_slug)
             name = project.get("title", project_slug)
+            client_side = project.get("client_side", "unknown")
+            server_side = project.get("server_side", "unknown")
         except Exception:
             name = project_slug
 
@@ -168,6 +172,8 @@ class ModManager:
             sha512=actual_sha512,
             game_version=config.mc_version,
             loader=config.mc_loader,
+            client_side=client_side,
+            server_side=server_side,
         )
 
         logger.info(f"Mod installed: {name} ({filename})")
@@ -225,6 +231,23 @@ class ModManager:
                 # Try to guess slug from filename (remove version/loader suffix)
                 slug = filename.replace(".jar", "")
                 name = slug  # Use filename as display name
+                client_side = "unknown"
+                server_side = "unknown"
+
+                # Try to identify mod via Modrinth hash lookup
+                try:
+                    version_info = await modrinth.get_version_by_hash(sha512)
+                    if version_info:
+                        project_id = version_info.get("project_id", "")
+                        if project_id:
+                            project = await modrinth.get_project(project_id)
+                            slug = project.get("slug", slug)
+                            name = project.get("title", name)
+                            client_side = project.get("client_side", "unknown")
+                            server_side = project.get("server_side", "unknown")
+                except Exception:
+                    pass  # API failed, keep defaults
+
                 await db.add_mod(
                     slug=slug,
                     name=name,
@@ -233,6 +256,8 @@ class ModManager:
                     sha512=sha512,
                     game_version=config.mc_version,
                     loader=config.mc_loader,
+                    client_side=client_side,
+                    server_side=server_side,
                 )
                 added.append(filename)
                 logger.info(f"Synced untracked mod: {filename}")
@@ -459,6 +484,58 @@ class ModManager:
     async def install_from_zip(self, zip_data: bytes) -> Dict:
         """Legacy wrapper — delegates to install_from_archive."""
         return await self.install_from_archive("archive.zip", zip_data)
+
+    async def enrich_mod_sides(self) -> int:
+        """Update client_side/server_side for mods that have 'unknown'.
+
+        Tries Modrinth hash lookup, then project lookup by slug.
+        Returns number of mods updated.
+        """
+        mods = await db.get_installed_mods()
+        updated = 0
+        for mod in mods:
+            slug = mod[1]
+            sha512 = mod[5]
+            # Check if side info already known (columns 8,9 if present)
+            # Since installed_mods may not have these columns in the tuple yet,
+            # we query directly
+            row = await db.fetch_one(
+                "SELECT client_side, server_side FROM installed_mods WHERE slug = ?",
+                (slug,),
+            )
+            if not row:
+                continue
+            if row[0] != "unknown":
+                continue  # already enriched
+
+            client_side = "unknown"
+            server_side = "unknown"
+            try:
+                # Try hash lookup first
+                if sha512:
+                    version_info = await modrinth.get_version_by_hash(sha512)
+                    if version_info:
+                        project_id = version_info.get("project_id", "")
+                        if project_id:
+                            project = await modrinth.get_project(project_id)
+                            client_side = project.get("client_side", "unknown")
+                            server_side = project.get("server_side", "unknown")
+                # Fallback: try slug lookup (works for Modrinth-installed mods)
+                if client_side == "unknown" and slug and slug != "unknown":
+                    try:
+                        project = await modrinth.get_project(slug)
+                        client_side = project.get("client_side", "unknown")
+                        server_side = project.get("server_side", "unknown")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            if client_side != "unknown":
+                await db.update_mod_sides(slug, client_side, server_side)
+                updated += 1
+
+        return updated
 
     async def list_installed(self) -> List:
         return await db.get_installed_mods()

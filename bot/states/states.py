@@ -23,6 +23,12 @@ class ModState(StatesGroup):
     waiting_upload_confirm = State()
 
 
+class PluginState(StatesGroup):
+    waiting_search_query = State()
+    waiting_plugin_files = State()
+    waiting_upload_confirm = State()
+
+
 class ConfigState(StatesGroup):
     waiting_value = State()
 

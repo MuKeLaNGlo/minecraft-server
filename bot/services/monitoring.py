@@ -2,7 +2,7 @@ import asyncio
 import re
 from typing import List, Optional
 
-from core.config import config
+from core.config import config, PLUGIN_LOADERS
 from minecraft.docker_manager import docker_manager
 from minecraft.rcon import rcon
 from utils.logger import logger
@@ -61,20 +61,48 @@ class MonitoringService:
                 )
 
     async def get_tps(self) -> Optional[float]:
-        """Get TPS from server. Tries forge tps, then spark."""
-        result = await rcon.execute("forge tps")
-        tps = self._parse_tps(result)
-        if tps is not None:
-            return tps
-
-        # Try spark if forge didn't work
-        result = await rcon.execute("spark tps")
-        return self._parse_tps_spark(result)
+        """Get TPS from server. Strategy depends on loader type."""
+        if config.mc_loader in PLUGIN_LOADERS:
+            # Paper/Purpur/Spigot — built-in `tps` command
+            result = await rcon.execute("tps")
+            tps = self._parse_tps_paper(result)
+            if tps is not None:
+                return tps
+            # Fallback to spark plugin
+            result = await rcon.execute("spark tps")
+            return self._parse_tps_spark(result)
+        else:
+            # Forge/Fabric/NeoForge — `forge tps` command
+            result = await rcon.execute("forge tps")
+            tps = self._parse_tps(result)
+            if tps is not None:
+                return tps
+            # Fallback to spark mod
+            result = await rcon.execute("spark tps")
+            return self._parse_tps_spark(result)
 
     def _parse_tps(self, text: str) -> Optional[float]:
         """Parse forge tps output."""
         # "Overall: Mean tick time: 12.34 ms. Mean TPS: 20.00"
         match = re.search(r"Mean TPS:\s*([\d.]+)", text)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass
+        return None
+
+    def _parse_tps_paper(self, text: str) -> Optional[float]:
+        """Parse Paper/Purpur/Spigot tps output.
+
+        Format: §6TPS from last 1m, 5m, 15m: §a*20.0, §a*20.0, §a*20.0
+        Or without color codes: TPS from last 1m, 5m, 15m: *20.0, *20.0, *20.0
+        We take the 1-minute TPS (first value).
+        """
+        # Strip Minecraft color codes §X
+        clean = re.sub(r"§[0-9a-fk-or]", "", text)
+        # Find all TPS values (may have * prefix for "capped at 20")
+        match = re.search(r"TPS.*?:\s*\*?([\d.]+)", clean)
         if match:
             try:
                 return float(match.group(1))

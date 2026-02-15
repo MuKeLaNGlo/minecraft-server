@@ -24,8 +24,21 @@ config_router = Router()
 
 CONFIG_MENU_TEXT = section_header(
     "⚙", "Настройки сервера",
-    "Редактирование server.properties.\nВыбери категорию или примени шаблон.",
+    "Редактирование конфигурации.\nВыбери категорию или примени шаблон.",
 )
+
+
+# ── callback_data encoding helpers ──
+# Property names like "paper:optimize-explosions" contain ":"
+# which conflicts with our callback_data format "cfg:action:param:value".
+# We encode ":" → "~" in callback_data and decode back.
+
+def _encode_prop(prop_name: str) -> str:
+    return prop_name.replace(":", "~")
+
+
+def _decode_prop(encoded: str) -> str:
+    return encoded.replace("~", ":")
 
 
 def _config_main_kb() -> InlineKeyboardMarkup:
@@ -53,14 +66,15 @@ def _prop_value_kb(prop_name: str, current_value: str) -> InlineKeyboardMarkup:
     """Build inline KB with value buttons based on property type."""
     meta = EDITABLE_PROPERTIES.get(prop_name, {})
     prop_type = meta.get("type", "text")
+    enc = _encode_prop(prop_name)
     buttons = []
 
     if prop_type == "bool":
         row = []
         for val, label in [("true", "✅ Вкл"), ("false", "❌ Выкл")]:
-            text = f"{label} •" if current_value == val else label
+            text = f"{label} •" if current_value.lower() == val else label
             row.append(InlineKeyboardButton(
-                text=text, callback_data=f"cfg:set:{prop_name}:{val}"
+                text=text, callback_data=f"cfg:set:{enc}:{val}"
             ))
         buttons.append(row)
 
@@ -70,7 +84,7 @@ def _prop_value_kb(prop_name: str, current_value: str) -> InlineKeyboardMarkup:
         for val, label in zip(values, labels):
             text = f"{label} •" if current_value == val else label
             buttons.append([InlineKeyboardButton(
-                text=text, callback_data=f"cfg:set:{prop_name}:{val}"
+                text=text, callback_data=f"cfg:set:{enc}:{val}"
             )])
 
     elif prop_type == "range":
@@ -79,7 +93,7 @@ def _prop_value_kb(prop_name: str, current_value: str) -> InlineKeyboardMarkup:
         for val, label in presets:
             text = f"[{label}]" if current_value == val else label
             row.append(InlineKeyboardButton(
-                text=text, callback_data=f"cfg:set:{prop_name}:{val}"
+                text=text, callback_data=f"cfg:set:{enc}:{val}"
             ))
             if len(row) >= 4:
                 buttons.append(row)
@@ -87,12 +101,12 @@ def _prop_value_kb(prop_name: str, current_value: str) -> InlineKeyboardMarkup:
         if row:
             buttons.append(row)
         buttons.append([InlineKeyboardButton(
-            text="✏ Ввести вручную", callback_data=f"cfg:input:{prop_name}"
+            text="✏ Ввести вручную", callback_data=f"cfg:input:{enc}"
         )])
 
     else:  # text
         buttons.append([InlineKeyboardButton(
-            text="✏ Ввести значение", callback_data=f"cfg:input:{prop_name}"
+            text="✏ Ввести значение", callback_data=f"cfg:input:{enc}"
         )])
 
     buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="cfg:back_cat")])
@@ -102,18 +116,24 @@ def _prop_value_kb(prop_name: str, current_value: str) -> InlineKeyboardMarkup:
 async def _show_category(callback: CallbackQuery, state: FSMContext, cat_key: str, cat: dict):
     """Display a property category with its editable properties."""
     await state.update_data(current_category=cat_key)
-    props = server_config.read_properties()
     buttons = []
     lines = [f"<b>{cat['label']}</b>", f"{cat['desc']}\n"]
     for prop_name in cat["properties"]:
-        val = props.get(prop_name, "не задано")
+        val = server_config.get_property(prop_name) or "не задано"
         meta = EDITABLE_PROPERTIES.get(prop_name, {})
         desc = meta.get("desc", prop_name) if isinstance(meta, dict) else prop_name
-        lines.append(f"<code>{prop_name}</code> = <b>{val}</b>")
+        # Short display name (strip file prefix for readability)
+        display_name = prop_name.split(":", 1)[-1] if ":" in prop_name else prop_name
+        lines.append(f"<code>{display_name}</code> = <b>{val}</b>")
+        enc = _encode_prop(prop_name)
+        btn_text = f"✏ {desc}: {val}"
+        # Telegram limits callback_data to 64 bytes — truncate button text if needed
+        if len(btn_text) > 40:
+            btn_text = f"✏ {desc[:25]}…: {val}"
         buttons.append([
             InlineKeyboardButton(
-                text=f"✏ {desc}: {val}",
-                callback_data=f"cfg:prop:{prop_name}",
+                text=btn_text,
+                callback_data=f"cfg:prop:{enc}",
             )
         ])
     buttons.append([InlineKeyboardButton(text="◀ Назад", callback_data="cfg:back")])
@@ -170,22 +190,28 @@ async def config_callback(callback: CallbackQuery, state: FSMContext):
         await _show_category(callback, state, cat_key, cat)
 
     elif action == "prop":
-        prop_name = parts[2]
+        prop_name = _decode_prop(parts[2])
         await callback.answer()
         meta = EDITABLE_PROPERTIES.get(prop_name, {})
         desc = meta.get("desc", prop_name) if isinstance(meta, dict) else prop_name
         current = server_config.get_property(prop_name) or "не задано"
+        display_name = prop_name.split(":", 1)[-1] if ":" in prop_name else prop_name
+
+        # Show file hint for YAML properties
+        file_hint = ""
+        if isinstance(meta, dict) and "file" in meta:
+            file_hint = f"\n📁 Файл: <code>{meta['file']}.yml</code>"
 
         text = (
-            f"<b>{prop_name}</b>\n"
-            f"{desc}\n\n"
+            f"<b>{display_name}</b>\n"
+            f"{desc}{file_hint}\n\n"
             f"Текущее значение: <b>{current}</b>"
         )
         kb = _prop_value_kb(prop_name, current)
         await show_menu(callback, text, kb)
 
     elif action == "set":
-        prop_name = parts[2]
+        prop_name = _decode_prop(parts[2])
         value = ":".join(parts[3:])
         await callback.answer()
 
@@ -197,14 +223,15 @@ async def config_callback(callback: CallbackQuery, state: FSMContext):
                 f"Перезапусти сервер для применения."
             )
         else:
-            text = error_text("Не удалось изменить. server.properties не найден?")
+            text = error_text("Не удалось изменить. Файл конфигурации не найден?")
 
         current = server_config.get_property(prop_name) or value
         meta = EDITABLE_PROPERTIES.get(prop_name, {})
         desc = meta.get("desc", prop_name) if isinstance(meta, dict) else prop_name
+        display_name = prop_name.split(":", 1)[-1] if ":" in prop_name else prop_name
         full_text = (
             f"{text}\n\n"
-            f"<b>{prop_name}</b>\n"
+            f"<b>{display_name}</b>\n"
             f"{desc}\n\n"
             f"Текущее значение: <b>{current}</b>"
         )
@@ -214,7 +241,7 @@ async def config_callback(callback: CallbackQuery, state: FSMContext):
         await show_menu(callback, full_text, kb)
 
     elif action == "input":
-        prop_name = parts[2]
+        prop_name = _decode_prop(parts[2])
         await callback.answer()
         meta = EDITABLE_PROPERTIES.get(prop_name, {})
         desc = meta.get("desc", prop_name) if isinstance(meta, dict) else prop_name
@@ -327,7 +354,7 @@ async def process_config_value(message: Message, state: FSMContext):
             f"Перезапусти сервер для применения."
         )
     else:
-        text = error_text("Не удалось изменить свойство. server.properties не найден?")
+        text = error_text("Не удалось изменить свойство. Файл конфигурации не найден?")
 
     await state.clear()
     await message.answer(text)

@@ -17,8 +17,11 @@ MAIN_MENU_TEXT = section_header(
 async def cmd_start(message: Message):
     kb = await main_menu_kb(message.from_user.id)
     await message.answer(MAIN_MENU_TEXT, reply_markup=kb, parse_mode="HTML")
-    # Send minimal reply KB as fallback
-    await message.answer("Используй кнопки выше для навигации.", reply_markup=MENU_REPLY_KB)
+    # Send minimal reply KB as fallback + user ID for admin setup
+    await message.answer(
+        f"Твой ID: <code>{message.from_user.id}</code>",
+        reply_markup=MENU_REPLY_KB,
+    )
 
 
 @common_router.message(F.text.lower() == "📋 меню")

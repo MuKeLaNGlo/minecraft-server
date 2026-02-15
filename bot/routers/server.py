@@ -1,4 +1,5 @@
 import asyncio
+import html as html_mod
 from datetime import datetime, timezone
 
 from aiogram import Router, F
@@ -262,6 +263,8 @@ async def server_callback(callback: CallbackQuery, state: FSMContext):
             await rcon.execute("say Сервер будет остановлен через 10 секунд!")
             await callback.message.edit_text("⏳ Остановка через 10 секунд...", reply_markup=_server_kb, parse_mode="HTML")
             await asyncio.sleep(10)
+        # Close all player sessions before stopping
+        await db.close_all_sessions()
         result = await docker_manager.stop()
         await callback.message.edit_text(result, reply_markup=_server_kb, parse_mode="HTML")
         await asyncio.sleep(2)
@@ -276,6 +279,8 @@ async def server_callback(callback: CallbackQuery, state: FSMContext):
             await rcon.execute("say Сервер перезапускается через 10 секунд!")
             await callback.message.edit_text("⏳ Рестарт через 10 секунд...", reply_markup=_server_kb, parse_mode="HTML")
             await asyncio.sleep(10)
+        # Close all player sessions before restarting
+        await db.close_all_sessions()
         result = await docker_manager.restart()
         await callback.message.edit_text(result, reply_markup=_server_kb, parse_mode="HTML")
         await asyncio.sleep(2)
@@ -283,9 +288,15 @@ async def server_callback(callback: CallbackQuery, state: FSMContext):
 
     elif action == "logs":
         lines = int(parts[2]) if len(parts) > 2 else 50
-        logs = await docker_manager.logs(lines=lines)
+        # Request extra lines to compensate for RCON noise that gets filtered
+        raw_lines = lines * 3
+        logs = await docker_manager.logs(lines=raw_lines)
         logs = clean_log(logs)
-        result = f"<pre>{truncate(logs)}</pre>"
+        # Keep only the last N useful lines
+        log_lines = logs.splitlines()
+        if len(log_lines) > lines:
+            logs = "\n".join(log_lines[-lines:])
+        result = f"<pre>{html_mod.escape(truncate(logs))}</pre>"
         try:
             await callback.message.edit_text(result, reply_markup=_server_kb, parse_mode="HTML")
         except Exception as e:

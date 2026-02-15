@@ -24,12 +24,15 @@ class ModrinthAPI:
     async def search(
         self, query: str, limit: int = 10, offset: int = 0,
         server_only: bool = False,
+        project_type: str = "mod",
+        loaders: list[str] | None = None,
     ) -> Dict:
-        """Search mods filtered by current loader and MC version."""
+        """Search projects filtered by loader and MC version."""
+        loader_facet = [f"categories:{l}" for l in (loaders or [config.mc_loader])]
         facet_list = [
-            [f"categories:{config.mc_loader}"],
+            loader_facet,
             [f"versions:{config.mc_version}"],
-            ["project_type:mod"],
+            [f"project_type:{project_type}"],
         ]
         if server_only:
             facet_list.append(["server_side:required", "server_side:optional"])
@@ -54,15 +57,15 @@ class ModrinthAPI:
     async def get_versions(
         self,
         project_id: str,
-        loader: Optional[str] = None,
+        loaders: list[str] | None = None,
         game_version: Optional[str] = None,
     ) -> List[Dict]:
-        """Get project versions filtered by loader and game version."""
+        """Get project versions filtered by loader(s) and game version."""
         params = {}
-        loader = loader or config.mc_loader
+        loaders = loaders or [config.mc_loader]
         game_version = game_version or config.mc_version
-        if loader:
-            params["loaders"] = json.dumps([loader])
+        if loaders:
+            params["loaders"] = json.dumps(loaders)
         if game_version:
             params["game_versions"] = json.dumps([game_version])
 
@@ -78,12 +81,28 @@ class ModrinthAPI:
             resp.raise_for_status()
             return await resp.json()
 
-    async def check_updates(self, hashes: List[str]) -> Dict:
-        """Check for updates for multiple mods by their SHA512 hashes."""
+    async def get_version_by_hash(self, sha512: str) -> Optional[Dict]:
+        """Look up a version by file SHA512 hash."""
+        try:
+            async with self.session.get(
+                f"{BASE_URL}/version_file/{sha512}",
+                params={"algorithm": "sha512"},
+            ) as resp:
+                if resp.status == 404:
+                    return None
+                resp.raise_for_status()
+                return await resp.json()
+        except Exception:
+            return None
+
+    async def check_updates(
+        self, hashes: List[str], loaders: list[str] | None = None,
+    ) -> Dict:
+        """Check for updates for multiple projects by their SHA512 hashes."""
         payload = {
             "hashes": hashes,
             "algorithm": "sha512",
-            "loaders": [config.mc_loader],
+            "loaders": loaders or [config.mc_loader],
             "game_versions": [config.mc_version],
         }
         async with self.session.post(

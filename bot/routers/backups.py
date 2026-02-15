@@ -56,10 +56,12 @@ async def backups_callback(callback: CallbackQuery, state: FSMContext):
         result = await backup_manager.create_backup()
         if result["success"]:
             logger.info(f"Backup created [{callback.from_user.id}]: {result['filename']}")
+            dims = result.get("dimensions", 1)
+            dim_info = f"\nИзмерений: {dims}" if dims > 1 else ""
             text = success_text(
                 f"Бэкап создан!\n"
                 f"Файл: <code>{result['filename']}</code>\n"
-                f"Размер: {format_bytes(result['size'])}"
+                f"Размер: {format_bytes(result['size'])}{dim_info}"
             )
         else:
             text = error_text(result["error"])

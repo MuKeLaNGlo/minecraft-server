@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from datetime import datetime, timezone
 
 from aiogram.types import ErrorEvent
 
@@ -13,6 +14,7 @@ from routers.admin import admin_router
 from routers.server import server_router
 from routers.players import players_router
 from routers.mods import mods_router
+from routers.plugins import plugins_router
 from routers.backups import backups_router
 from routers.config_editor import config_router
 from routers.monitoring import monitoring_router
@@ -29,6 +31,7 @@ from services.monitoring import monitoring
 from services.modrinth import modrinth
 from services.scheduler import init_scheduler, scheduler
 from services.log_watcher import log_watcher, LogEvent
+from minecraft.docker_manager import docker_manager
 
 
 async def on_startup() -> None:
@@ -41,8 +44,48 @@ async def on_startup() -> None:
             await db.add_admin(admin_id)
             logger.info(f"Супер-админ {admin_id} добавлен из переменных окружения")
 
-    # Close stale player sessions from previous run
-    await db.close_all_sessions()
+    # Replay missed logs from bot downtime — recover join/leave events.
+    # This must happen BEFORE LogWatcher starts to avoid duplicates.
+    replay_since = None
+    last_shutdown = await db.get_setting("bot_last_shutdown")
+    if last_shutdown:
+        replay_since = datetime.fromisoformat(last_shutdown).replace(tzinfo=timezone.utc)
+    elif await docker_manager.is_running():
+        # First run — replay from MC server container start
+        try:
+            status = await docker_manager.status()
+            started_at = status.get("started_at", "")
+            if started_at:
+                # Docker format: "2024-01-15T12:34:56.789Z"
+                replay_since = datetime.fromisoformat(
+                    started_at.replace("Z", "+00:00")
+                )
+                logger.info(f"First run — will replay logs from MC start: {started_at}")
+        except Exception:
+            pass
+
+    if replay_since and await docker_manager.is_running():
+        try:
+            events = await log_watcher.replay_missed_logs(replay_since)
+            if events:
+                # Close stale sessions at shutdown time (not now!) so replay
+                # can correctly re-open/close them with real timestamps.
+                close_at = last_shutdown or replay_since.strftime("%Y-%m-%d %H:%M:%S")
+                await db.close_all_sessions(at=close_at)
+                for etype, pname, ts in events:
+                    if etype == "join":
+                        await db.open_session_at(pname, ts)
+                    elif etype == "leave":
+                        await db.close_session_at(pname, ts)
+                logger.info(f"Replayed {len(events)} session events "
+                            f"(since {replay_since.strftime('%Y-%m-%d %H:%M:%S')})")
+            else:
+                await db.close_all_sessions()
+        except Exception as e:
+            logger.warning(f"Log replay failed: {e}")
+            await db.close_all_sessions()
+    else:
+        await db.close_all_sessions()
 
     # Start scheduler
     await init_scheduler()
@@ -105,6 +148,18 @@ async def on_startup() -> None:
         except Exception as e:
             logger.warning(f"Notification send failed: {e}")
 
+    async def _close_stale_sessions(event: LogEvent):
+        """Close all open sessions when MC server starts/restarts.
+
+        Handles all scenarios:
+        - Server restarted via bot
+        - Server restarted manually / via docker
+        - VM/physical server crash + restart
+        Any session still open when server boots is stale.
+        """
+        closed = await db.close_all_sessions()
+        logger.info(f"Server ready — closed all stale player sessions")
+
     async def _notify_server_ready(event: LogEvent):
         if await db.get_setting("notifications_enabled") != "1":
             return
@@ -122,14 +177,36 @@ async def on_startup() -> None:
     log_watcher.on("join", _notify_join)
     log_watcher.on("leave", _notify_leave)
     log_watcher.on("chat", _bridge_mc_to_tg)
+    log_watcher.on("server_ready", _close_stale_sessions)
     log_watcher.on("server_ready", _notify_server_ready)
 
     await log_watcher.start(interval=config.log_watcher_interval)
+
+    # Safety net: ensure currently online players have open sessions.
+    # Log replay above should handle this, but /list catches edge cases.
+    # open_session() won't duplicate if session already exists.
+    try:
+        from minecraft.player_manager import player_manager
+        if await docker_manager.is_running():
+            data = await player_manager.get_online_players()
+            for name in data.get("players", []):
+                await db.open_session(name)
+                logger.info(f"Recovered session for online player: {name}")
+            if data.get("players"):
+                logger.info(f"Synced {len(data['players'])} online player(s) on startup")
+    except Exception as e:
+        logger.warning(f"Failed to sync online players on startup: {e}")
 
     logger.info("Бот запущен")
 
 
 async def on_shutdown() -> None:
+    # Save shutdown time so next startup can replay missed logs
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        await db.set_setting("bot_last_shutdown", now)
+    except Exception:
+        pass
     await log_watcher.stop()
     await monitoring.stop()
     scheduler.shutdown(wait=False)
@@ -194,6 +271,7 @@ async def main() -> None:
     dp.include_router(server_router)
     dp.include_router(players_router)
     dp.include_router(mods_router)
+    dp.include_router(plugins_router)
     dp.include_router(backups_router)
     dp.include_router(config_router)
     dp.include_router(monitoring_router)

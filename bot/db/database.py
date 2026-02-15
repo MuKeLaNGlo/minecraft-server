@@ -65,12 +65,50 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_player
                 ON player_sessions(player_name);
+            CREATE TABLE IF NOT EXISTS installed_plugins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                version_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                sha512 TEXT,
+                game_version TEXT,
+                loader TEXT,
+                installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS bot_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS user_settings (
+                telegram_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (telegram_id, key)
+            );
         """)
         await self.con.commit()
+
+        # Migrations — add columns if missing
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Run schema migrations (add missing columns)."""
+        # Add client_side / server_side to installed_mods (v2)
+        try:
+            await self.con.execute(
+                "ALTER TABLE installed_mods ADD COLUMN client_side TEXT DEFAULT 'unknown'"
+            )
+            await self.con.commit()
+        except Exception:
+            pass  # column already exists
+        try:
+            await self.con.execute(
+                "ALTER TABLE installed_mods ADD COLUMN server_side TEXT DEFAULT 'unknown'"
+            )
+            await self.con.commit()
+        except Exception:
+            pass  # column already exists
 
     # --- helpers ---
 
@@ -178,13 +216,15 @@ class Database:
         sha512: str,
         game_version: str,
         loader: str,
+        client_side: str = "unknown",
+        server_side: str = "unknown",
     ) -> bool:
         try:
             await self.execute(
                 """INSERT INTO installed_mods
-                   (slug, name, version_id, filename, sha512, game_version, loader)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (slug, name, version_id, filename, sha512, game_version, loader),
+                   (slug, name, version_id, filename, sha512, game_version, loader, client_side, server_side)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (slug, name, version_id, filename, sha512, game_version, loader, client_side, server_side),
             )
             return True
         except aiosqlite.IntegrityError:
@@ -210,6 +250,73 @@ class Database:
         return await self.fetch_one(
             "SELECT id, slug, name, version_id, filename, sha512, game_version, loader "
             "FROM installed_mods WHERE slug = ?",
+            (slug,),
+        )
+
+    async def get_client_mods(self) -> List[Any]:
+        """Get installed mods needed on client side (required, optional, or unknown)."""
+        return await self.fetch_all(
+            "SELECT id, slug, name, version_id, filename, client_side "
+            "FROM installed_mods "
+            "WHERE client_side != 'unsupported' "
+            "ORDER BY "
+            "  CASE client_side "
+            "    WHEN 'required' THEN 0 "
+            "    WHEN 'optional' THEN 1 "
+            "    ELSE 2 "
+            "  END, name"
+        )
+
+    async def update_mod_sides(self, slug: str, client_side: str, server_side: str) -> None:
+        """Update client_side/server_side for an existing mod."""
+        await self.execute(
+            "UPDATE installed_mods SET client_side = ?, server_side = ? WHERE slug = ?",
+            (client_side, server_side, slug),
+        )
+
+    # --- installed plugins ---
+
+    async def add_plugin(
+        self,
+        slug: str,
+        name: str,
+        version_id: str,
+        filename: str,
+        sha512: str,
+        game_version: str,
+        loader: str,
+    ) -> bool:
+        try:
+            await self.execute(
+                """INSERT INTO installed_plugins
+                   (slug, name, version_id, filename, sha512, game_version, loader)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (slug, name, version_id, filename, sha512, game_version, loader),
+            )
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def remove_plugin(self, slug: str) -> bool:
+        await self.execute("DELETE FROM installed_plugins WHERE slug = ?", (slug,))
+        return True
+
+    async def get_installed_plugins(self) -> List[Any]:
+        return await self.fetch_all(
+            "SELECT id, slug, name, version_id, filename, sha512, game_version, loader, installed_at "
+            "FROM installed_plugins ORDER BY name"
+        )
+
+    async def plugin_installed(self, slug: str) -> bool:
+        row = await self.fetch_one(
+            "SELECT 1 FROM installed_plugins WHERE slug = ?", (slug,)
+        )
+        return row is not None
+
+    async def get_plugin_by_slug(self, slug: str) -> Optional[Any]:
+        return await self.fetch_one(
+            "SELECT id, slug, name, version_id, filename, sha512, game_version, loader "
+            "FROM installed_plugins WHERE slug = ?",
             (slug,),
         )
 
@@ -291,12 +398,51 @@ class Database:
         rows = await self.fetch_all("SELECT key, value FROM bot_settings")
         return {r[0]: r[1] for r in rows}
 
+    # --- user settings ---
+
+    async def get_user_setting(self, telegram_id: str, key: str, default: str = "") -> str:
+        row = await self.fetch_one(
+            "SELECT value FROM user_settings WHERE telegram_id = ? AND key = ?",
+            (str(telegram_id), key),
+        )
+        return row[0] if row else default
+
+    async def set_user_setting(self, telegram_id: str, key: str, value: str) -> None:
+        await self.con.execute(
+            "INSERT INTO user_settings (telegram_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(telegram_id, key) DO UPDATE SET value = excluded.value",
+            (str(telegram_id), key, value),
+        )
+        await self.con.commit()
+
     # --- player sessions ---
 
     async def open_session(self, player_name: str) -> int:
+        # Don't open a duplicate if player already has an open session
+        existing = await self.fetch_one(
+            "SELECT id FROM player_sessions WHERE player_name = ? AND left_at IS NULL",
+            (player_name,),
+        )
+        if existing:
+            return existing[0]
         await self.execute(
             "INSERT INTO player_sessions (player_name, joined_at) VALUES (?, datetime('now'))",
             (player_name,),
+        )
+        row = await self.fetch_one("SELECT last_insert_rowid()")
+        return row[0]
+
+    async def open_session_at(self, player_name: str, joined_at: str) -> int:
+        """Open a session with a specific timestamp (for log replay)."""
+        existing = await self.fetch_one(
+            "SELECT id FROM player_sessions WHERE player_name = ? AND left_at IS NULL",
+            (player_name,),
+        )
+        if existing:
+            return existing[0]
+        await self.execute(
+            "INSERT INTO player_sessions (player_name, joined_at) VALUES (?, ?)",
+            (player_name, joined_at),
         )
         row = await self.fetch_one("SELECT last_insert_rowid()")
         return row[0]
@@ -312,10 +458,28 @@ class Database:
             (player_name,),
         )
 
-    async def close_all_sessions(self) -> None:
+    async def close_session_at(self, player_name: str, left_at: str) -> None:
+        """Close a session with a specific timestamp (for log replay)."""
         await self.execute(
-            "UPDATE player_sessions SET left_at = datetime('now') WHERE left_at IS NULL"
+            """UPDATE player_sessions SET left_at = ?
+               WHERE id = (
+                   SELECT id FROM player_sessions
+                   WHERE player_name = ? AND left_at IS NULL
+                   ORDER BY joined_at DESC LIMIT 1
+               )""",
+            (left_at, player_name),
         )
+
+    async def close_all_sessions(self, at: str = "") -> None:
+        """Close all open sessions. If 'at' provided, use that timestamp."""
+        if at:
+            await self.execute(
+                "UPDATE player_sessions SET left_at = ? WHERE left_at IS NULL", (at,)
+            )
+        else:
+            await self.execute(
+                "UPDATE player_sessions SET left_at = datetime('now') WHERE left_at IS NULL"
+            )
 
     async def get_player_stats(self, player_name: str) -> Optional[Any]:
         row = await self.fetch_one(

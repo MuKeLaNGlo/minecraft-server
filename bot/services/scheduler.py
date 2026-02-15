@@ -54,6 +54,8 @@ def _add_job(task_id: int, task_type: str, cron_expr: str, extra_data: str = Non
             await asyncio.sleep(3)
             await rcon.execute("say Сервер перезапускается через 7 секунд!")
             await asyncio.sleep(7)
+            # Close all player sessions before restarting
+            await db.close_all_sessions()
             await docker_manager.restart()
             logger.info("Scheduled restart executed")
 

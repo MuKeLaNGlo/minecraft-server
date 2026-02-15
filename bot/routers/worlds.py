@@ -34,13 +34,17 @@ async def _worlds_list_kb() -> InlineKeyboardMarkup:
     for w in worlds:
         name = w["name"]
         generated = w.get("generated", True)
+        dims = w.get("dimensions", 1)
         label = f"🌍 {name}"
         if name == current:
             label += " (активный)"
         if not generated:
             label += " (новый)"
         else:
-            label += f" — {w['size_mb']:.0f} МБ"
+            size_str = f"{w['size_mb']:.0f} МБ"
+            if dims > 1:
+                size_str += f" · {dims} изм."
+            label += f" — {size_str}"
         buttons.append([
             InlineKeyboardButton(text=label, callback_data=f"world:detail:{name[:40]}")
         ])
@@ -92,7 +96,19 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
         else:
             size = f"{world_info['size_mb']:.0f} МБ"
             modified = world_info["last_modified"].strftime("%d.%m.%Y %H:%M")
-            text += f"\n\nРазмер: {size}\nИзменён: {modified}"
+            dims = world_info.get("dimensions", 1)
+            text += f"\n\nРазмер: {size} (все измерения)"
+            if dims > 1:
+                text += f"\nИзмерения: {dims} (overworld"
+                dim_dirs = world_manager.get_dimension_dirs(name)
+                dim_names = [d.name for d in dim_dirs if d.name != name]
+                for dn in dim_names:
+                    if dn.endswith("_nether"):
+                        text += " + nether"
+                    elif dn.endswith("_the_end"):
+                        text += " + the end"
+                text += ")"
+            text += f"\nИзменён: {modified}"
 
         buttons = []
         if not is_active:
@@ -141,6 +157,7 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "restart":
         from minecraft.docker_manager import docker_manager
         from minecraft.rcon import rcon
+        from db.database import db as _db
         import asyncio
         await callback.answer("Перезапускаю...")
         if await docker_manager.is_running():
@@ -155,6 +172,8 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
                 pass
         else:
             await callback.message.edit_text("⏳ Перезапуск сервера...")
+        # Close all player sessions before restarting
+        await _db.close_all_sessions()
         result = await docker_manager.restart()
         text = success_text(f"Сервер перезапущен.\nНовый мир загружается.")
         kb = await _worlds_list_kb()
@@ -189,10 +208,12 @@ async def worlds_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"⏳ Создаю бэкап мира '{name}'...")
         result = await backup_manager.create_backup(world_name=name)
         if result["success"]:
+            dims = result.get("dimensions", 1)
+            dim_info = f"\nИзмерений: {dims}" if dims > 1 else ""
             text = success_text(
                 f"Бэкап мира '{name}' создан!\n"
                 f"Файл: <code>{result['filename']}</code>\n"
-                f"Размер: {format_bytes(result['size'])}"
+                f"Размер: {format_bytes(result['size'])}{dim_info}"
             )
         else:
             text = error_text(result["error"])

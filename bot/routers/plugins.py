@@ -17,39 +17,40 @@ from aiogram.types import (
 
 from core.config import config
 from db.database import db
-from minecraft.mod_manager import mod_manager
+from minecraft.plugin_manager import plugin_manager, _plugin_loaders
 from services.modrinth import modrinth
-from states.states import ModState
+from states.states import PluginState
 from utils.formatting import truncate, section_header, success_text, error_text, LINE
 from utils.logger import logger
 from utils.nav import check_admin, show_menu, back_row, restart_row, return_to_menu, CANCEL_REPLY_KB, MENU_REPLY_KB
 
-mods_router = Router()
+plugins_router = Router()
 
-async def _mods_menu_text() -> str:
-    count = len(await mod_manager.list_installed())
+
+async def _plugins_menu_text() -> str:
+    count = len(await plugin_manager.list_installed())
     return section_header(
-        "📦", "Моды",
-        f"Установлено модов: <b>{count}</b>\n"
-        f"Лоадер: <b>{config.mc_loader}</b> | Версия: <b>{config.mc_version}</b>",
+        "🔌", "Плагины",
+        f"Установлено плагинов: <b>{count}</b>\n"
+        f"Сервер: <b>{config.mc_loader}</b> | Версия: <b>{config.mc_version}</b>",
     )
 
-_mods_kb = InlineKeyboardMarkup(
+
+_plugins_kb = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 Поиск модов", callback_data="mod:search")],
-        [InlineKeyboardButton(text="📋 Установленные", callback_data="mod:installed")],
+        [InlineKeyboardButton(text="🔍 Поиск плагинов", callback_data="plug:search")],
+        [InlineKeyboardButton(text="📋 Установленные", callback_data="plug:installed")],
         [
-            InlineKeyboardButton(text="📤 Загрузить моды / модпак", callback_data="mod:upload"),
-            InlineKeyboardButton(text="🔃 Синхронизация", callback_data="mod:sync"),
+            InlineKeyboardButton(text="📤 Загрузить плагин", callback_data="plug:upload"),
+            InlineKeyboardButton(text="🔃 Синхронизация", callback_data="plug:sync"),
         ],
-        [InlineKeyboardButton(text="🔄 Проверить обновления", callback_data="mod:updates")],
+        [InlineKeyboardButton(text="🔄 Проверить обновления", callback_data="plug:updates")],
         back_row("main"),
     ]
 )
 
 
 def _format_date(iso_str: str) -> str:
-    """Format ISO date string to readable format."""
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         return dt.strftime("%d.%m.%Y")
@@ -57,17 +58,17 @@ def _format_date(iso_str: str) -> str:
         return "—"
 
 
-@mods_router.callback_query(F.data == "nav:mods")
-async def mods_menu(callback: CallbackQuery):
+@plugins_router.callback_query(F.data == "nav:plugins")
+async def plugins_menu(callback: CallbackQuery):
     if not await check_admin(callback):
         return
-    await mod_manager.sync_mods_dir()
-    await show_menu(callback, await _mods_menu_text(), _mods_kb)
+    await plugin_manager.sync_plugins_dir()
+    await show_menu(callback, await _plugins_menu_text(), _plugins_kb)
     await callback.answer()
 
 
-@mods_router.callback_query(F.data.startswith("mod:"))
-async def mods_callback(callback: CallbackQuery, state: FSMContext):
+@plugins_router.callback_query(F.data.startswith("plug:"))
+async def plugins_callback(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback):
         return
 
@@ -76,48 +77,47 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
 
     if action == "search":
         await callback.answer()
-        await state.set_state(ModState.waiting_search_query)
+        await state.set_state(PluginState.waiting_search_query)
         await callback.message.answer(
-            "Введи название мода для поиска:", reply_markup=CANCEL_REPLY_KB
+            "Введи название плагина для поиска:", reply_markup=CANCEL_REPLY_KB
         )
 
     elif action == "installed":
         await callback.answer()
-        # Auto-sync before showing list
-        await mod_manager.sync_mods_dir()
-        mods = await mod_manager.list_installed()
-        if not mods:
-            await show_menu(callback, "Установленных модов нет.", _mods_kb)
+        await plugin_manager.sync_plugins_dir()
+        plugins = await plugin_manager.list_installed()
+        if not plugins:
+            await show_menu(callback, "Установленных плагинов нет.", _plugins_kb)
             return
 
         buttons = []
-        for mod in mods:
-            slug, name = mod[1], mod[2]
+        for p in plugins:
+            slug, name = p[1], p[2]
             buttons.append([
                 InlineKeyboardButton(
-                    text=f"🗑 {name}", callback_data=f"mod:remove:{slug}"
+                    text=f"🗑 {name}", callback_data=f"plug:remove:{slug}"
                 )
             ])
         buttons.append([
-            InlineKeyboardButton(text="📥 Скачать все .jar", callback_data="mod:download:files"),
-            InlineKeyboardButton(text="📦 Скачать .zip", callback_data="mod:download:zip"),
+            InlineKeyboardButton(text="📥 Скачать все .jar", callback_data="plug:download:files"),
+            InlineKeyboardButton(text="📦 Скачать .zip", callback_data="plug:download:zip"),
         ])
-        buttons.append(back_row("mods"))
+        buttons.append(back_row("plugins"))
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await show_menu(callback, f"📋 Установленные моды ({len(mods)}):", kb)
+        await show_menu(callback, f"📋 Установленные плагины ({len(plugins)}):", kb)
 
     elif action == "updates":
         await callback.answer("Проверяю обновления...")
         await callback.message.edit_text("⏳ Проверяю обновления...")
-        updates = await mod_manager.check_updates()
+        updates = await plugin_manager.check_updates()
         if not updates:
-            text = success_text("Все моды актуальны!")
+            text = success_text("Все плагины актуальны!")
         else:
             lines = ["Доступные обновления:\n"]
             for u in updates:
                 lines.append(f"  - {u['name']}: версия {u['new_version']}")
             text = "\n".join(lines)
-        await show_menu(callback, text, _mods_kb)
+        await show_menu(callback, text, _plugins_kb)
 
     elif action == "results":
         offset = int(parts[2]) if len(parts) > 2 else 0
@@ -125,9 +125,9 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         query = data.get("search_query", "")
         if not query:
-            await show_menu(callback, "Поиск устарел, попробуй заново.", _mods_kb)
+            await show_menu(callback, "Поиск устарел, попробуй заново.", _plugins_kb)
             return
-        server_only = data.get("server_only", True)
+        server_only = data.get("server_only", False)
         await _show_search_results(callback.message, state, query, offset, edit=True, server_only=server_only)
 
     elif action == "toggle_filter":
@@ -135,20 +135,19 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         query = data.get("search_query", "")
         if not query:
-            await show_menu(callback, "Поиск устарел, попробуй заново.", _mods_kb)
+            await show_menu(callback, "Поиск устарел, попробуй заново.", _plugins_kb)
             return
-        server_only = not data.get("server_only", True)
+        server_only = not data.get("server_only", False)
         await _show_search_results(callback.message, state, query, 0, edit=True, server_only=server_only)
 
     elif action == "detail":
         slug = parts[2]
         await callback.answer()
-        # Remember current search offset so "back" returns to correct page
         data = await state.get_data()
         search_offset = data.get("search_offset", 0)
         try:
             project = await modrinth.get_project(slug)
-            versions = await modrinth.get_versions(slug)
+            versions = await modrinth.get_versions(slug, loaders=_plugin_loaders())
             latest = versions[0]["version_number"] if versions else "нет"
 
             title = project.get("title", slug)
@@ -160,78 +159,64 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
             license_id = license_info.get("id", "—") if isinstance(license_info, dict) else str(license_info) if license_info else "—"
             source_url = project.get("source_url", "")
 
-            server_side = project.get("server_side", "unknown")
-            client_side = project.get("client_side", "unknown")
-            _side_labels = {"required": "обязателен", "optional": "опционально", "unsupported": "не нужен"}
-            side_text = (
-                f"🖥 Сервер: {_side_labels.get(server_side, server_side)} | "
-                f"💻 Клиент: {_side_labels.get(client_side, client_side)}"
-            )
-            is_client_only = server_side == "unsupported"
-
             text = (
                 f"{LINE}\n"
-                f"📦 <b>{title}</b>\n"
+                f"🔌 <b>{title}</b>\n"
                 f"{LINE}\n\n"
                 f"{desc}\n\n"
-                f"{side_text}\n"
                 f"📊 Загрузки: {downloads:,}\n"
                 f"📅 Обновлён: {updated}\n"
                 f"🏷 Категории: {categories}\n"
                 f"📜 Лицензия: {license_id}\n"
             )
-            if is_client_only:
-                text += "\n⚠ <b>Это клиентский мод — на сервер ставить не нужно!</b>\n"
             if source_url:
                 text += f"🔗 Исходный код: {source_url}\n"
             text += (
                 f"\n📥 Последняя версия: <b>{latest}</b>\n"
-                f"🔧 Лоадер: {config.mc_loader} | MC: {config.mc_version}"
+                f"🔧 Сервер: {config.mc_loader} | MC: {config.mc_version}"
             )
 
-            installed = await db.mod_installed(slug)
+            installed = await db.plugin_installed(slug)
             buttons = []
             if installed:
-                mod_data = await db.get_mod_by_slug(slug)
-                if mod_data:
-                    inst_file = mod_data[4] if len(mod_data) > 4 else ""
+                plugin_data = await db.get_plugin_by_slug(slug)
+                if plugin_data:
+                    inst_file = plugin_data[4] if len(plugin_data) > 4 else ""
                     if inst_file:
                         text += f"\n\n✅ Установлен: <code>{inst_file}</code>"
-                buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"mod:remove:{slug}")])
+                buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"plug:remove:{slug}")])
             else:
-                # Show required dependencies before install
                 if versions:
                     try:
-                        req_deps = await mod_manager._resolve_dependencies(versions[0])
+                        req_deps = await plugin_manager._resolve_dependencies(versions[0])
                         if req_deps:
                             dep_names = ", ".join(d["name"] for d in req_deps)
                             text += f"\n\n📎 Зависимости: {dep_names}"
                     except Exception:
                         pass
-                buttons.append([InlineKeyboardButton(text="📥 Установить", callback_data=f"mod:install:{slug}")])
+                buttons.append([InlineKeyboardButton(text="📥 Установить", callback_data=f"plug:install:{slug}")])
             buttons.append([InlineKeyboardButton(
-                text="🔗 Modrinth", url=f"https://modrinth.com/mod/{slug}"
+                text="🔗 Modrinth", url=f"https://modrinth.com/plugin/{slug}"
             )])
-            # If we came from search, go back to results; otherwise go to mods menu
             if data.get("search_query"):
                 buttons.append([InlineKeyboardButton(
-                    text="◀ К результатам", callback_data=f"mod:results:{search_offset}"
+                    text="◀ К результатам", callback_data=f"plug:results:{search_offset}"
                 )])
             else:
-                buttons.append(back_row("mods"))
+                buttons.append(back_row("plugins"))
             detail_kb = InlineKeyboardMarkup(inline_keyboard=buttons)
             await show_menu(callback, text, detail_kb)
         except Exception as e:
-            await show_menu(callback, error_text(f"Ошибка загрузки: {e}"), _mods_kb)
+            await show_menu(callback, error_text(f"Ошибка загрузки: {e}"), _plugins_kb)
 
     elif action == "install":
         slug = parts[2]
         await callback.answer("Устанавливаю...")
-        await callback.message.edit_text("⏳ Скачиваю и устанавливаю мод...")
-        result = await mod_manager.install_mod(slug)
+        await callback.message.edit_text("⏳ Скачиваю и устанавливаю плагин...")
+        result = await plugin_manager.install_plugin(slug)
         if result["success"]:
             lines = [
-                f"Мод установлен!\n"
+                f"Плагин установлен!\n"
                 f"Название: {result['name']}\n"
                 f"Версия: {result['version']}\n"
                 f"Файл: <code>{result['filename']}</code>"
@@ -245,7 +230,7 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
             text = success_text("\n".join(lines))
         else:
             text = error_text(result["error"])
-        kb = InlineKeyboardMarkup(inline_keyboard=_mods_kb.inline_keyboard.copy())
+        kb = InlineKeyboardMarkup(inline_keyboard=_plugins_kb.inline_keyboard.copy())
         if result["success"]:
             kb.inline_keyboard.insert(0, restart_row())
         await show_menu(callback, text, kb)
@@ -253,25 +238,25 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "remove":
         slug = parts[2]
         await callback.answer()
-        mod = await db.get_mod_by_slug(slug)
-        name = mod[2] if mod else slug
+        plugin = await db.get_plugin_by_slug(slug)
+        name = plugin[2] if plugin else slug
         confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"mod:confirm_remove:{slug}"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="mod:installed"),
+                InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"plug:confirm_remove:{slug}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="plug:installed"),
             ],
         ])
-        await show_menu(callback, f"Удалить мод <b>{name}</b>?", confirm_kb)
+        await show_menu(callback, f"Удалить плагин <b>{name}</b>?", confirm_kb)
 
     elif action == "confirm_remove":
         slug = parts[2]
         await callback.answer("Удаляю...")
-        result = await mod_manager.remove_mod(slug)
+        result = await plugin_manager.remove_plugin(slug)
         if result["success"]:
-            text = success_text(f"Мод {result['name']} удалён. Перезапусти сервер.")
+            text = success_text(f"Плагин {result['name']} удалён. Перезапусти сервер.")
         else:
             text = error_text(result["error"])
-        kb = InlineKeyboardMarkup(inline_keyboard=_mods_kb.inline_keyboard.copy())
+        kb = InlineKeyboardMarkup(inline_keyboard=_plugins_kb.inline_keyboard.copy())
         if result["success"]:
             kb.inline_keyboard.insert(0, restart_row())
         await show_menu(callback, text, kb)
@@ -279,47 +264,45 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
     elif action == "download":
         mode = parts[2]  # "files" or "zip"
         await callback.answer("Готовлю файлы...")
-        mods_dir = mod_manager.mods_dir
-        jars = sorted(mods_dir.glob("*.jar"))
+        plugins_dir = plugin_manager.plugins_dir
+        jars = sorted(plugins_dir.glob("*.jar"))
         if not jars:
-            await show_menu(callback, "Нет .jar файлов для скачивания.", _mods_kb)
+            await show_menu(callback, "Нет .jar файлов для скачивания.", _plugins_kb)
             return
 
         if mode == "zip":
-            # Pack all jars into a zip and send
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                 tmp_path = tmp.name
             try:
                 with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
                     for jar in jars:
                         zf.write(jar, jar.name)
-                doc = FSInputFile(tmp_path, filename="mods.zip")
+                doc = FSInputFile(tmp_path, filename="plugins.zip")
                 await callback.message.answer_document(
-                    doc, caption=f"📦 Все моды ({len(jars)} шт.)",
+                    doc, caption=f"📦 Все плагины ({len(jars)} шт.)",
                 )
             except Exception as e:
-                logger.error(f"Mod zip download error: {e}")
+                logger.error(f"Plugin zip download error: {e}")
                 await callback.message.answer(f"❌ Ошибка: {e}")
             finally:
                 os.unlink(tmp_path)
         else:
-            # Send each jar individually
             for jar in jars:
                 try:
                     doc = FSInputFile(jar)
                     await callback.message.answer_document(doc)
                 except Exception as e:
-                    logger.error(f"Mod send error ({jar.name}): {e}")
+                    logger.error(f"Plugin send error ({jar.name}): {e}")
                     await callback.message.answer(f"❌ {jar.name}: {e}")
 
     elif action == "sync":
-        await callback.answer("Сканирую папку mods...")
-        await callback.message.edit_text("⏳ Синхронизация с папкой mods...")
-        result = await mod_manager.sync_mods_dir()
+        await callback.answer("Сканирую папку plugins...")
+        await callback.message.edit_text("⏳ Синхронизация с папкой plugins...")
+        result = await plugin_manager.sync_plugins_dir()
         added = result["added"]
         removed = result["removed"]
         if not added and not removed:
-            text = success_text("Всё синхронизировано, новых модов не обнаружено.")
+            text = success_text("Всё синхронизировано, новых плагинов не обнаружено.")
         else:
             lines = []
             if added:
@@ -331,16 +314,14 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
                 for f in removed:
                     lines.append(f"  − {f}")
             text = success_text("\n".join(lines))
-        await show_menu(callback, text, _mods_kb)
+        await show_menu(callback, text, _plugins_kb)
 
     elif action == "upload":
         await callback.answer()
         await state.update_data(pending_uploads=[])
-        await state.set_state(ModState.waiting_mod_files)
+        await state.set_state(PluginState.waiting_plugin_files)
         await callback.message.answer(
-            "📤 Отправь файлы модов:\n"
-            "• <b>.jar</b> — отдельные моды (можно несколько)\n"
-            "• <b>.zip / .tar.gz / .rar</b> — модпак (архив с .jar файлами)\n\n"
+            "📤 Отправь .jar файл плагина (можно несколько).\n\n"
             "После загрузки появится предпросмотр для подтверждения.",
             reply_markup=CANCEL_REPLY_KB,
             parse_mode="HTML",
@@ -356,12 +337,12 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
             await return_to_menu(callback.message)
             return
 
-        await callback.message.edit_text("⏳ Устанавливаю моды...")
+        await callback.message.edit_text("⏳ Устанавливаю плагины...")
         all_installed = []
         all_skipped = []
         all_errors = []
         for p in pending:
-            result = await mod_manager.install_pending(
+            result = await plugin_manager.install_pending(
                 p["tmp_path"], p["original_name"], p["is_archive"],
             )
             all_installed.extend(result.get("installed", []))
@@ -386,8 +367,8 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
             lines.append("\nПерезапусти сервер для применения.")
         text = success_text("\n".join(lines)) if all_installed else error_text("\n".join(lines) or "Нечего устанавливать.")
         await callback.message.edit_text(text, parse_mode="HTML")
-        menu_text = await _mods_menu_text()
-        kb = InlineKeyboardMarkup(inline_keyboard=_mods_kb.inline_keyboard.copy())
+        menu_text = await _plugins_menu_text()
+        kb = InlineKeyboardMarkup(inline_keyboard=_plugins_kb.inline_keyboard.copy())
         if all_installed:
             kb.inline_keyboard.insert(0, restart_row())
         await callback.message.answer(menu_text, reply_markup=kb, parse_mode="HTML")
@@ -405,38 +386,39 @@ async def mods_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Загрузка отменена.")
         await return_to_menu(callback.message)
 
-    elif action in ("back", "mods"):
+    elif action in ("back", "plugins"):
         await callback.answer()
-        await show_menu(callback, await _mods_menu_text(), _mods_kb)
+        await show_menu(callback, await _plugins_menu_text(), _plugins_kb)
 
 
 async def _show_search_results(
     message, state: FSMContext, query: str, offset: int = 0,
-    edit: bool = False, server_only: bool = True,
+    edit: bool = False, server_only: bool = False,
 ):
-    # Save query + offset + filter in state
     await state.update_data(search_query=query, search_offset=offset, server_only=server_only)
 
     try:
-        data = await modrinth.search(query, limit=5, offset=offset, server_only=server_only)
+        data = await modrinth.search(
+            query, limit=5, offset=offset, server_only=server_only,
+            project_type="plugin", loaders=_plugin_loaders(),
+        )
     except Exception as e:
         text = error_text(f"Ошибка поиска: {e}")
         if edit:
-            await message.edit_text(text, reply_markup=_mods_kb)
+            await message.edit_text(text, reply_markup=_plugins_kb)
         else:
-            await message.answer(text, reply_markup=_mods_kb)
+            await message.answer(text, reply_markup=_plugins_kb)
         return
 
     hits = data.get("hits", [])
     total = data.get("total_hits", 0)
 
     if not hits:
-        # If server_only found nothing, suggest showing all
         if server_only:
-            text = "Серверных модов не найдено."
+            text = "Серверных плагинов не найдено."
             toggle_kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔍 Показать все моды", callback_data="mod:toggle_filter")],
-                [InlineKeyboardButton(text="✖ Закрыть", callback_data="mod:back")],
+                [InlineKeyboardButton(text="🔍 Показать все", callback_data="plug:toggle_filter")],
+                [InlineKeyboardButton(text="✖ Закрыть", callback_data="plug:back")],
             ])
             if edit:
                 await message.edit_text(text, reply_markup=toggle_kb)
@@ -445,9 +427,9 @@ async def _show_search_results(
         else:
             text = "Ничего не найдено."
             if edit:
-                await message.edit_text(text, reply_markup=_mods_kb)
+                await message.edit_text(text, reply_markup=_plugins_kb)
             else:
-                await message.answer(text, reply_markup=_mods_kb)
+                await message.answer(text, reply_markup=_plugins_kb)
             await state.clear()
         return
 
@@ -459,7 +441,6 @@ async def _show_search_results(
         title = hit.get("title", slug)
         downloads = hit.get("downloads", 0)
         desc = truncate(hit.get("description", ""), 100)
-        server_side = hit.get("server_side", "")
 
         lines.append(f"<b>{title}</b>")
         if desc:
@@ -467,31 +448,29 @@ async def _show_search_results(
         lines.append("")
 
         dl_short = f"{downloads // 1000}K" if downloads >= 1000 else str(downloads)
-        side_icon = "🖥" if server_side == "required" else "🔄" if server_side == "optional" else "💻"
-        btn_label = f"{side_icon} {title} — {dl_short} DL"
+        btn_label = f"🔌 {title} — {dl_short} DL"
         buttons.append([
             InlineKeyboardButton(
                 text=btn_label,
-                callback_data=f"mod:detail:{slug[:50]}",
+                callback_data=f"plug:detail:{slug[:50]}",
             ),
         ])
 
     nav_buttons = []
     if offset > 0:
         nav_buttons.append(
-            InlineKeyboardButton(text="◀ Назад", callback_data=f"mod:results:{offset - 5}")
+            InlineKeyboardButton(text="◀ Назад", callback_data=f"plug:results:{offset - 5}")
         )
     if offset + 5 < total:
         nav_buttons.append(
-            InlineKeyboardButton(text="Далее ▶", callback_data=f"mod:results:{offset + 5}")
+            InlineKeyboardButton(text="Далее ▶", callback_data=f"plug:results:{offset + 5}")
         )
     if nav_buttons:
         buttons.append(nav_buttons)
 
-    # Toggle filter button
     toggle_text = "📋 Показать все" if server_only else "🖥 Только серверные"
-    buttons.append([InlineKeyboardButton(text=toggle_text, callback_data="mod:toggle_filter")])
-    buttons.append([InlineKeyboardButton(text="✖ Закрыть", callback_data="mod:back")])
+    buttons.append([InlineKeyboardButton(text=toggle_text, callback_data="plug:toggle_filter")])
+    buttons.append([InlineKeyboardButton(text="✖ Закрыть", callback_data="plug:back")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     text = "\n".join(lines)
 
@@ -501,16 +480,15 @@ async def _show_search_results(
         await message.answer(text, reply_markup=kb)
 
 
-@mods_router.message(
+@plugins_router.message(
     F.text.lower().in_({"◀ отмена", "cancel"}),
     StateFilter(
-        ModState.waiting_search_query,
-        ModState.waiting_mod_files,
-        ModState.waiting_upload_confirm,
+        PluginState.waiting_search_query,
+        PluginState.waiting_plugin_files,
+        PluginState.waiting_upload_confirm,
     ),
 )
-async def cancel_mods(message: Message, state: FSMContext):
-    # Clean up pending temp files
+async def cancel_plugins(message: Message, state: FSMContext):
     data = await state.get_data()
     for p in data.get("pending_uploads", []):
         try:
@@ -522,7 +500,6 @@ async def cancel_mods(message: Message, state: FSMContext):
 
 
 def _build_preview_text(pending: list) -> str:
-    """Build preview text from accumulated pending uploads."""
     total_new = []
     total_existing = []
     for p in pending:
@@ -539,37 +516,30 @@ def _build_preview_text(pending: list) -> str:
         for n in total_existing:
             lines.append(f"  • {n}")
     if not total_new:
-        lines.append("\n⚠ Нет новых модов для установки.")
+        lines.append("\n⚠ Нет новых плагинов для установки.")
     return "\n".join(lines)
 
 
 def _upload_confirm_kb(pending: list) -> InlineKeyboardMarkup:
-    """Build confirm/cancel keyboard for upload preview."""
     total_new = sum(len(p["new"]) for p in pending)
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
                 text=f"✅ Установить ({total_new})" if total_new else "⚠ Нет новых",
-                callback_data="mod:upload_confirm" if total_new else "mod:upload_cancel",
+                callback_data="plug:upload_confirm" if total_new else "plug:upload_cancel",
             ),
-            InlineKeyboardButton(text="❌ Отменить", callback_data="mod:upload_cancel"),
+            InlineKeyboardButton(text="❌ Отменить", callback_data="plug:upload_cancel"),
         ],
     ])
 
 
 async def _receive_and_preview(message: Message, state: FSMContext):
-    """Download file, preview contents, show confirm buttons."""
     doc = message.document
     filename = doc.file_name or "unknown"
-    lower = filename.lower()
-
-    _ARCHIVE_EXTS = (".zip", ".tar.gz", ".tgz", ".tar", ".rar")
-    is_jar = lower.endswith(".jar")
-    is_archive = any(lower.endswith(ext) for ext in _ARCHIVE_EXTS)
-    if not is_jar and not is_archive:
+    if not filename.lower().endswith(".jar"):
         await message.reply(
             f"⚠ <b>{filename}</b> — неподдерживаемый формат.\n"
-            f"Принимаются: .jar, .zip, .tar.gz, .rar",
+            f"Принимаются только .jar файлы.",
             parse_mode="HTML",
         )
         return
@@ -580,14 +550,13 @@ async def _receive_and_preview(message: Message, state: FSMContext):
         bio = await message.bot.download_file(file.file_path)
         data = bio.read()
 
-        preview = await mod_manager.preview_upload(filename, data)
+        preview = await plugin_manager.preview_upload(filename, data)
         if not preview["success"]:
             await status_msg.edit_text(
                 f"❌ {preview.get('error', 'Ошибка')}", parse_mode="HTML"
             )
             return
 
-        # Accumulate pending uploads in state
         fsm_data = await state.get_data()
         pending = fsm_data.get("pending_uploads", [])
         pending.append({
@@ -598,7 +567,7 @@ async def _receive_and_preview(message: Message, state: FSMContext):
             "existing": preview["existing"],
         })
         await state.update_data(pending_uploads=pending)
-        await state.set_state(ModState.waiting_upload_confirm)
+        await state.set_state(PluginState.waiting_upload_confirm)
 
         text = _build_preview_text(pending)
         text += "\n\nОтправь ещё файлы или подтверди установку."
@@ -606,163 +575,27 @@ async def _receive_and_preview(message: Message, state: FSMContext):
         await status_msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     except Exception as e:
-        logger.error(f"Mod upload error ({filename}): {e}")
+        logger.error(f"Plugin upload error ({filename}): {e}")
         await status_msg.edit_text(
             f"❌ Ошибка загрузки {filename}: {e}", parse_mode="HTML"
         )
 
 
-@mods_router.message(StateFilter(ModState.waiting_mod_files), F.document)
-async def upload_mod_file(message: Message, state: FSMContext):
-    """Handle first uploaded file(s) — preview before installing."""
+@plugins_router.message(StateFilter(PluginState.waiting_plugin_files), F.document)
+async def upload_plugin_file(message: Message, state: FSMContext):
     await _receive_and_preview(message, state)
 
 
-@mods_router.message(StateFilter(ModState.waiting_upload_confirm), F.document)
-async def upload_more_files(message: Message, state: FSMContext):
-    """Allow sending more files while waiting for confirm."""
+@plugins_router.message(StateFilter(PluginState.waiting_upload_confirm), F.document)
+async def upload_more_plugin_files(message: Message, state: FSMContext):
     await _receive_and_preview(message, state)
 
 
-@mods_router.message(StateFilter(ModState.waiting_search_query))
+@plugins_router.message(StateFilter(PluginState.waiting_search_query))
 async def search_query_handler(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:
-        await message.answer("Введи название мода:")
+        await message.answer("Введи название плагина:")
         return
     await state.clear()
     await _show_search_results(message, state, query)
-
-
-# ═══════════════════════════════════════════════════════════════
-# Client mods — available to ALL users (no auth check)
-# ═══════════════════════════════════════════════════════════════
-
-async def _client_mods_text_and_kb():
-    """Build client mods menu text and keyboard."""
-    mods = await db.get_client_mods()
-
-    if not mods:
-        text = section_header(
-            "📥", "Моды сервера",
-            f"Лоадер: <b>{config.mc_loader}</b> | Версия: <b>{config.mc_version}</b>\n\n"
-            f"На сервере нет модов для скачивания.",
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data="cmods:refresh")],
-            back_row("main"),
-        ])
-        return text, kb
-
-    required = [(m[2], m[4]) for m in mods if m[5] == "required"]
-    optional = [(m[2], m[4]) for m in mods if m[5] == "optional"]
-    unknown = [(m[2], m[4]) for m in mods if m[5] not in ("required", "optional")]
-
-    lines = [
-        section_header(
-            "📥", "Моды сервера",
-            f"Моды для установки на клиент.\n"
-            f"Лоадер: <b>{config.mc_loader}</b> | Версия: <b>{config.mc_version}</b>",
-        ),
-    ]
-
-    if required:
-        lines.append(f"\n<b>Обязательные ({len(required)}):</b>")
-        for name, _ in required:
-            lines.append(f"  • {name}")
-
-    if optional:
-        lines.append(f"\n<b>Опциональные ({len(optional)}):</b>")
-        for name, _ in optional:
-            lines.append(f"  • {name}")
-
-    if unknown:
-        lines.append(f"\n<b>Прочие ({len(unknown)}):</b>")
-        for name, _ in unknown:
-            lines.append(f"  • {name}")
-
-    text = "\n".join(lines)
-
-    buttons = []
-    total = len(required) + len(optional) + len(unknown)
-    buttons.append([InlineKeyboardButton(
-        text=f"📦 Скачать все ({total} шт.)",
-        callback_data="cmods:download:all",
-    )])
-    if required and (optional or unknown):
-        buttons.append([InlineKeyboardButton(
-            text=f"📦 Только обязательные ({len(required)} шт.)",
-            callback_data="cmods:download:required",
-        )])
-    buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="cmods:refresh")])
-    buttons.append(back_row("main"))
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    return text, kb
-
-
-@mods_router.callback_query(F.data == "nav:client_mods")
-async def client_mods_menu(callback: CallbackQuery):
-    """Show client mods — available to everyone (no auth check)."""
-    text, kb = await _client_mods_text_and_kb()
-    await show_menu(callback, text, kb)
-    await callback.answer()
-
-
-@mods_router.callback_query(F.data.startswith("cmods:"))
-async def client_mods_callback(callback: CallbackQuery):
-    """Handle client mods actions — no auth check."""
-    parts = callback.data.split(":")
-    action = parts[1]
-
-    if action == "refresh":
-        await callback.answer("Обновляю...")
-        # Try to enrich side info for unknown mods
-        await mod_manager.enrich_mod_sides()
-        text, kb = await _client_mods_text_and_kb()
-        await show_menu(callback, text, kb)
-        return
-
-    if action == "download":
-        mode = parts[2]  # "all" or "required"
-        await callback.answer("Готовлю архив...")
-
-        mods = await db.get_client_mods()
-        if mode == "required":
-            mods = [m for m in mods if m[5] == "required"]
-
-        if not mods:
-            text, kb = await _client_mods_text_and_kb()
-            await show_menu(callback, "Нет модов для скачивания.", kb)
-            return
-
-        mods_dir = mod_manager.mods_dir
-        jars = []
-        for m in mods:
-            filename = m[4]
-            path = mods_dir / filename
-            if path.exists():
-                jars.append(path)
-
-        if not jars:
-            await callback.message.answer("❌ Файлы модов не найдены на сервере.")
-            return
-
-        # Pack into zip and send
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for jar in jars:
-                    zf.write(jar, jar.name)
-            label = "обязательные" if mode == "required" else "все"
-            doc = FSInputFile(tmp_path, filename=f"mods_{config.mc_version}_{config.mc_loader}.zip")
-            await callback.message.answer_document(
-                doc, caption=f"📦 Моды сервера ({label}, {len(jars)} шт.)\n"
-                             f"Лоадер: {config.mc_loader} | MC: {config.mc_version}",
-            )
-        except Exception as e:
-            logger.error(f"Client mods zip error: {e}")
-            await callback.message.answer(f"❌ Ошибка: {e}")
-        finally:
-            os.unlink(tmp_path)

@@ -43,3 +43,6 @@ class Config:
 
 
 config = Config()
+
+PLUGIN_LOADERS = {"purpur", "paper", "spigot", "bukkit"}
+MOD_LOADERS = {"forge", "fabric", "neoforge", "quilt"}

@@ -8,14 +8,15 @@ from minecraft.docker_manager import docker_manager
 from utils.logger import logger
 
 # Log line patterns
-# Forge format: [Server thread/INFO] [minecraft/MinecraftServer]: Player joined the game
-# Vanilla format: [Server thread/INFO]: Player joined the game
-# Also strip ANSI escape codes first
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|>\.\.\.\.\[K|\[m")
-JOIN_RE = re.compile(r"\[Server thread/INFO\].*?:\s+(\w+) joined the game")
-LEAVE_RE = re.compile(r"\[Server thread/INFO\].*?:\s+(\w+) left the game")
-CHAT_RE = re.compile(r"\[Server thread/INFO\].*?:\s+<(\w+)>\s+(.+)")
-READY_RE = re.compile(r"\[Server thread/INFO\].*?:\s+Done \(([0-9.]+)s\)!")
+# Forge format:  [Server thread/INFO] [minecraft/MinecraftServer]: Player joined the game
+# Vanilla/Paper: [Server thread/INFO]: Player joined the game
+# Purpur/Paper:  [18:51:23 INFO]: Player joined the game
+# Also strip ANSI escape codes and Minecraft color codes first
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|>\.\.\.\.\[K|\[m|§[0-9a-fk-or]")
+JOIN_RE = re.compile(r"INFO\].*?:\s+(\w+) joined the game")
+LEAVE_RE = re.compile(r"INFO\].*?:\s+(\w+) left the game")
+CHAT_RE = re.compile(r"INFO\].*?:\s+<(\w+)>\s+(.+)")
+READY_RE = re.compile(r"INFO\].*?:\s+Done \(([0-9.]+)s\)!")
 
 EventHandler = Callable[["LogEvent"], Awaitable[None]]
 
@@ -114,6 +115,51 @@ class LogWatcher:
             )
 
         return None
+
+    async def replay_missed_logs(self, since: datetime) -> list[tuple[str, str, str]]:
+        """Parse old logs since a timestamp and return session events.
+
+        Returns list of (event_type, player_name, utc_timestamp_str)
+        where event_type is "join" or "leave".
+        Does NOT dispatch to handlers (no notifications sent).
+        """
+        if not await docker_manager.is_running():
+            return []
+
+        raw = await docker_manager.logs_since(since)
+        if not raw:
+            return []
+
+        events = []
+        for line in raw.strip().splitlines():
+            # Docker timestamp: "2024-01-15T12:34:56.789012345Z log content"
+            ts_str = None
+            content = line
+            if len(line) > 31 and line[0].isdigit():
+                ts_str = line[:30].strip()
+                content = line[31:].strip() if " " in line[:35] else line
+
+            event = self._parse_line(content)
+            if event and event.event_type in ("join", "leave"):
+                utc_str = self._docker_ts_to_sqlite(ts_str)
+                events.append((event.event_type, event.player_name, utc_str))
+
+        return events
+
+    @staticmethod
+    def _docker_ts_to_sqlite(ts_str: str | None) -> str:
+        """Convert Docker timestamp to SQLite datetime string."""
+        if ts_str:
+            try:
+                clean_ts = ts_str.rstrip("Z")
+                if "." in clean_ts:
+                    base, frac = clean_ts.split(".", 1)
+                    clean_ts = f"{base}.{frac[:6]}"
+                dt = datetime.fromisoformat(clean_ts).replace(tzinfo=timezone.utc)
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, IndexError):
+                pass
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     async def _dispatch(self, event: LogEvent) -> None:
         handlers = self._handlers.get(event.event_type, [])

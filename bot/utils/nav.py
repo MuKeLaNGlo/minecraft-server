@@ -7,8 +7,12 @@ from aiogram.types import (
     KeyboardButton,
 )
 
+from core.config import config, PLUGIN_LOADERS, MOD_LOADERS
 from db.database import db
 from utils.logger import logger
+
+_is_plugin_server = config.mc_loader in PLUGIN_LOADERS
+_is_mod_server = config.mc_loader in MOD_LOADERS
 
 # Minimal reply KB — fallback if inline message is lost
 MENU_REPLY_KB = ReplyKeyboardMarkup(
@@ -45,10 +49,16 @@ async def main_menu_kb(user_id: str | int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🖥 Сервер", callback_data="nav:server"),
             InlineKeyboardButton(text="👥 Игроки", callback_data="nav:players"),
         ])
-        buttons.append([
-            InlineKeyboardButton(text="📦 Моды", callback_data="nav:mods"),
-            InlineKeyboardButton(text="💾 Бэкапы", callback_data="nav:backups"),
-        ])
+        if _is_plugin_server:
+            buttons.append([
+                InlineKeyboardButton(text="🔌 Плагины", callback_data="nav:plugins"),
+                InlineKeyboardButton(text="💾 Бэкапы", callback_data="nav:backups"),
+            ])
+        else:
+            buttons.append([
+                InlineKeyboardButton(text="📦 Моды", callback_data="nav:mods"),
+                InlineKeyboardButton(text="💾 Бэкапы", callback_data="nav:backups"),
+            ])
         buttons.append([
             InlineKeyboardButton(text="🌍 Миры", callback_data="nav:worlds"),
             InlineKeyboardButton(text="⚙ Настройки", callback_data="nav:config"),
@@ -64,9 +74,15 @@ async def main_menu_kb(user_id: str | int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎮 RCON", callback_data="nav:console"),
             InlineKeyboardButton(text="🔑 Доступ к боту", callback_data="nav:admin"),
         ])
-        buttons.append([
-            InlineKeyboardButton(text="🤖 Бот", callback_data="nav:bot_settings"),
-        ])
+        if _is_mod_server:
+            buttons.append([
+                InlineKeyboardButton(text="📥 Моды сервера", callback_data="nav:client_mods"),
+                InlineKeyboardButton(text="🤖 Бот", callback_data="nav:bot_settings"),
+            ])
+        else:
+            buttons.append([
+                InlineKeyboardButton(text="🤖 Бот", callback_data="nav:bot_settings"),
+            ])
     elif has_access:
         buttons.append([
             InlineKeyboardButton(text="📊 Мониторинг", callback_data="nav:monitoring"),
@@ -76,10 +92,20 @@ async def main_menu_kb(user_id: str | int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎮 RCON", callback_data="nav:console"),
             InlineKeyboardButton(text="📈 Статистика", callback_data="nav:stats"),
         ])
+        if _is_mod_server:
+            buttons.append([
+                InlineKeyboardButton(text="📥 Моды сервера", callback_data="nav:client_mods"),
+            ])
     else:
-        buttons.append([
-            InlineKeyboardButton(text="📊 Мониторинг", callback_data="nav:monitoring"),
-        ])
+        if _is_mod_server:
+            buttons.append([
+                InlineKeyboardButton(text="📊 Мониторинг", callback_data="nav:monitoring"),
+                InlineKeyboardButton(text="📥 Моды сервера", callback_data="nav:client_mods"),
+            ])
+        else:
+            buttons.append([
+                InlineKeyboardButton(text="📊 Мониторинг", callback_data="nav:monitoring"),
+            ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
